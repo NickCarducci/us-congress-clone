@@ -1,0 +1,313 @@
+name: Roll Call Index Watcher
+
+on:
+  schedule:
+    # Daily, not monthly: representative-profile lookups (member name,
+    # party, term history) are local-only with no live Congress.gov
+    # fallback (see populist.js's /api/representatives/:bioguideId), so
+    # this clone is the only thing keeping someone who just left office
+    # from still showing as a sitting member.
+    #
+    # NOTE: the steps below that actually rebuild the profile dataset are
+    # gated on `steps.head` (see "Fetch upstream head"), which compares
+    # unitedstates/congress's own scraper-tool repo HEAD -- not
+    # congress-legislators' data repo. That's an imperfect proxy for "did
+    # legislator data actually change" and isn't fixed by this cron
+    # change alone; a daily check is still strictly better than monthly
+    # (cheap either way when the gate doesn't trip), but closing the gap
+    # to reliable ~1-day freshness needs that gating condition corrected
+    # too. Left as deliberate follow-up rather than a blind edit to a
+    # multi-step workflow with no way to dry-run it here.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: rollcall-watcher
+  cancel-in-progress: true
+
+env:
+  # 119th Congress = 2025-2026. Bump this at the start of each new Congress (odd years).
+  CURRENT_CONGRESS: 119
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Restore last seen commit
+        uses: actions/cache@v4
+        with:
+          path: .cache/usc
+          key: usc-head-${{ github.run_id }}
+          restore-keys: |
+            usc-head-
+
+      - name: Fetch upstream head
+        id: head
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/usc
+          CURRENT=$(git ls-remote https://github.com/unitedstates/congress.git HEAD | cut -f1)
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          if [ -f .cache/usc/head.txt ]; then
+            PREV=$(cat .cache/usc/head.txt)
+          else
+            PREV=""
+          fi
+          echo "previous=$PREV" >> "$GITHUB_OUTPUT"
+
+      # Scraper output (data/ + cache/) persists across runs via this cache so
+      # monthly runs only fetch roll calls that are new since last time —
+      # the scraper skips anything already in cache/ unless --force is passed.
+      - name: Restore scraper working directory
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        uses: actions/cache@v4
+        with:
+          path: congress-scraper
+          key: congress-scraper-${{ env.CURRENT_CONGRESS }}-${{ github.run_id }}
+          restore-keys: |
+            congress-scraper-${{ env.CURRENT_CONGRESS }}-
+
+      - name: Set up Python
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Scrape current Congress roll call votes
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxml2-dev libxslt1-dev libz-dev wget
+
+          if [ -d congress-scraper/.git ]; then
+            git -C congress-scraper fetch --depth=1 origin main
+            git -C congress-scraper reset --hard origin/main
+          else
+            rm -rf congress-scraper
+            git clone --depth=1 https://github.com/unitedstates/congress.git congress-scraper
+          fi
+
+          # usc-run (the package's real console-script entry point) is required —
+          # invoking the raw ./run script directly fails with
+          # "ModuleNotFoundError: No module named 'utils'" because congress/tasks/utils.py
+          # is only import-reachable through the installed package, not the bare script.
+          pip install -q ./congress-scraper
+          mkdir -p congress-scraper/data congress-scraper/cache
+          cd congress-scraper
+          usc-run votes --congress="${CURRENT_CONGRESS}"
+
+      # Senate roll calls identify voters by LIS ID (e.g. "S429"), not bioguide
+      # ID — there's no bioguide field in that vote data at all. Build a small
+      # lis->bioguide lookup from the companion legislators-current dataset so
+      # the indexer can resolve Senate voters the same way it already does
+      # House ones (which use bioguide IDs directly).
+      - name: Build LIS-to-bioguide lookup for Senate votes
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/legislators-current.yaml \
+            https://raw.githubusercontent.com/unitedstates/congress-legislators/main/legislators-current.yaml
+          python3 -c "
+          import json, yaml
+          with open('/tmp/legislators-current.yaml') as f:
+              legislators = yaml.safe_load(f)
+          mapping = {}
+          for person in legislators:
+              ids = person.get('id', {})
+              lis = ids.get('lis')
+              bioguide = ids.get('bioguide')
+              if lis and bioguide:
+                  mapping[lis] = bioguide
+          with open('congress-scraper/legislators-lis-to-bioguide.json', 'w') as f:
+              json.dump(mapping, f)
+          print(f'Mapped {len(mapping)} LIS IDs to bioguide IDs')
+          "
+
+      # GET /api/representatives/:bioguideId (member profile: name, party, photo,
+      # term history, office) used to call the live Congress.gov API on every
+      # single request with no caching at all — a real rate-limit risk on the
+      # same CONGRESS_API_KEY used for the bills feed. legislators-current.yaml
+      # (already fetched above) has everything that endpoint needs except a
+      # photo, which theunitedstates.io serves as a static asset (no API key,
+      # no rate limit) — so build it once here instead of calling out live.
+      - name: Build member profile dataset
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        run: |
+          set -euo pipefail
+          python3 -c "
+          import json, yaml
+
+          def congress_for_year(year):
+              return (year - 1789) // 2 + 1
+
+          # Congress.gov's own /v3/member/{bioguideId} returns the full state
+          # name (e.g. 'North Carolina'), not the 2-letter code
+          # legislators-current.yaml uses — match that exactly so the profile
+          # header renders the same as it always did.
+          STATE_NAMES = {
+              'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
+              'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware',
+              'FL': 'Florida', 'GA': 'Georgia', 'HI': 'Hawaii', 'ID': 'Idaho',
+              'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa', 'KS': 'Kansas',
+              'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
+              'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi',
+              'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada',
+              'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NY': 'New York',
+              'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma',
+              'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
+              'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah',
+              'VT': 'Vermont', 'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia',
+              'WI': 'Wisconsin', 'WY': 'Wyoming',
+              'DC': 'District of Columbia', 'AS': 'American Samoa', 'GU': 'Guam',
+              'MP': 'Northern Mariana Islands', 'PR': 'Puerto Rico', 'VI': 'Virgin Islands',
+          }
+
+          with open('/tmp/legislators-current.yaml') as f:
+              legislators = yaml.safe_load(f)
+
+          profiles = {}
+          for person in legislators:
+              bioguide = person.get('id', {}).get('bioguide')
+              if not bioguide:
+                  continue
+
+              name = person.get('name', {})
+              first = name.get('first', '')
+              last = name.get('last', '')
+              official_full = name.get('official_full') or f'{first} {last}'.strip()
+
+              terms = person.get('terms', [])
+              if not terms:
+                  continue
+              current = terms[-1]
+
+              term_items = []
+              party_history = []
+              for t in terms:
+                  start_year = int(t['start'][:4])
+                  end_year = int(t['end'][:4])
+                  chamber = 'House of Representatives' if t.get('type') == 'rep' else 'Senate'
+                  term_items.append({
+                      'congress': str(congress_for_year(start_year)),
+                      'chamber': chamber,
+                      'startYear': str(start_year),
+                      'endYear': str(end_year),
+                  })
+                  party = t.get('party')
+                  if party:
+                      party_history.append({
+                          'partyName': party,
+                          'partyAbbreviation': party[0],
+                          'startYear': start_year,
+                      })
+
+              is_house = current.get('type') == 'rep'
+              profiles[bioguide] = {
+                  'member': {
+                      'bioguideId': bioguide,
+                      'directOrderName': official_full,
+                      'invertedOrderName': f'{last}, {first}'.strip(', '),
+                      'state': STATE_NAMES.get(current.get('state'), current.get('state')),
+                      'district': str(current['district']) if is_house and 'district' in current else None,
+                      'depiction': {
+                          'imageUrl': f'https://theunitedstates.io/images/congress/450x550/{bioguide}.jpg'
+                      },
+                      'terms': term_items,
+                      'officialWebsiteUrl': current.get('url'),
+                      'addressInformation': {
+                          'officeAddress': current.get('office') or current.get('address'),
+                          'phoneNumber': current.get('phone'),
+                      },
+                      'partyHistory': party_history,
+                  }
+              }
+
+          with open('congress-scraper/legislators-profiles.json', 'w') as f:
+              json.dump(profiles, f)
+          print(f'Built profiles for {len(profiles)} sitting members')
+          "
+
+      # sponsoredLegislation/cosponsoredLegislation aren't in
+      # congress-legislators at all — Congress.gov's own per-member detail
+      # endpoint is the only source. Fetch it once per sitting member here
+      # (~537 calls, once a month, well inside the 5,000/hr ceiling for our
+      # key) instead of live per profile view, which is what caused this data
+      # to go missing when profiles moved off the live API.
+      - name: Enrich profiles with sponsorship counts
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        env:
+          CONGRESS_API_KEY: ${{ secrets.CONGRESS_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 -c "
+          import json, os, urllib.request
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+
+          api_key = os.environ['CONGRESS_API_KEY']
+
+          with open('congress-scraper/legislators-profiles.json') as f:
+              profiles = json.load(f)
+
+          def fetch_counts(bioguide):
+              url = f'https://api.congress.gov/v3/member/{bioguide}?api_key={api_key}&format=json'
+              # Congress.gov 403s the default urllib User-Agent.
+              req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; PopulistBot/1.0)'})
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as resp:
+                      data = json.load(resp)
+                  member = data.get('member', {})
+                  return bioguide, member.get('sponsoredLegislation'), member.get('cosponsoredLegislation')
+              except Exception as e:
+                  print(f'  warn: failed to fetch counts for {bioguide}: {e}')
+                  return bioguide, None, None
+
+          bioguides = list(profiles.keys())
+          done = 0
+          with ThreadPoolExecutor(max_workers=10) as pool:
+              futures = [pool.submit(fetch_counts, b) for b in bioguides]
+              for future in as_completed(futures):
+                  bioguide, sponsored, cosponsored = future.result()
+                  if sponsored is not None:
+                      profiles[bioguide]['member']['sponsoredLegislation'] = sponsored
+                  if cosponsored is not None:
+                      profiles[bioguide]['member']['cosponsoredLegislation'] = cosponsored
+                  done += 1
+                  if done % 50 == 0:
+                      print(f'  fetched {done}/{len(bioguides)}')
+
+          with open('congress-scraper/legislators-profiles.json', 'w') as f:
+              json.dump(profiles, f)
+          print(f'Enriched {len(bioguides)} profiles with sponsorship counts')
+          "
+
+      - name: Sync scraped data to server
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz -4 --exclude=cache/
+          path: congress-scraper/
+          remote_path: /home/ubuntu/us-congress-data/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
+
+      - name: Trigger index pipeline on change
+        if: steps.head.outputs.current != steps.head.outputs.previous
+        env:
+          WEBHOOK_URL: ${{ secrets.ROLLCALL_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.ROLLCALL_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK_URL:-}" ] || [ -z "${WEBHOOK_SECRET:-}" ]; then
+            echo "Missing ROLLCALL_WEBHOOK_URL or ROLLCALL_WEBHOOK_SECRET" >&2
+            exit 1
+          fi
+          curl -sS -X POST \
+            -H "x-webhook-secret: ${WEBHOOK_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            "${WEBHOOK_URL}"
+          echo "${{ steps.head.outputs.current }}" > .cache/usc/head.txt
+

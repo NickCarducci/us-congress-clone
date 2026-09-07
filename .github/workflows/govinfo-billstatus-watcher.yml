@@ -1,0 +1,77 @@
+name: GovInfo BILLSTATUS RSS Watcher
+
+# GovInfo's own BILLSTATUS batch-notification feed
+# (https://www.govinfo.gov/rss/billstatus-batch.xml) declares <ttl>15</ttl>
+# -- GPO's own recommended refresh interval -- and announces a new item
+# only once an update job actually completes (confirmed live: batches land
+# roughly every 4 hours, occasionally with longer gaps when nothing
+# changed). Polling that feed every 15 minutes and only triggering the real
+# scrape (bill-watcher.yml) when a genuinely new batch shows up means we
+# never lag GovInfo's own freshness by more than ~15 minutes, and we never
+# run the heavy job when there's nothing new to fetch -- cheaper AND
+# fresher than a blind fixed-interval cron.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: govinfo-billstatus-watcher
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Restore last-seen batch marker
+        uses: actions/cache@v4
+        with:
+          path: .cache/govinfo-billstatus-batch.txt
+          key: govinfo-billstatus-batch-${{ github.run_id }}
+          restore-keys: |
+            govinfo-billstatus-batch-
+
+      - name: Check for a new BILLSTATUS batch
+        id: check
+        run: |
+          set -euo pipefail
+          mkdir -p .cache
+
+          # Feed items are oldest-first, so the LAST <guid> in the file is
+          # the most recently completed batch, not the first.
+          LATEST=$(curl -sSL --fail https://www.govinfo.gov/rss/billstatus-batch.xml \
+            | grep -o '<guid[^>]*>[^<]*</guid>' \
+            | sed -E 's/<guid[^>]*>([^<]*)<\/guid>/\1/' \
+            | tail -1)
+
+          if [ -z "$LATEST" ]; then
+            echo "Could not parse a GUID from the feed this run; skipping."
+            echo "new_batch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PREV=""
+          if [ -f .cache/govinfo-billstatus-batch.txt ]; then
+            PREV=$(cat .cache/govinfo-billstatus-batch.txt)
+          fi
+
+          echo "Latest batch:   $LATEST"
+          echo "Previous batch: $PREV"
+
+          if [ "$LATEST" != "$PREV" ]; then
+            echo "$LATEST" > .cache/govinfo-billstatus-batch.txt
+            echo "new_batch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_batch=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger bill-watcher.yml
+        if: steps.check.outputs.new_batch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bill-watcher.yml --repo "${{ github.repository }}"

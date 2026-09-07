@@ -1,0 +1,90 @@
+name: Bill Data Watcher
+
+# Mirrors rollcall-watcher.yml's approach (a bulk clone of official public
+# data via unitedstates/congress, not live per-request Congress.gov API
+# calls) but stays a separate workflow/cache/scraper-checkout on purpose —
+# bill data and vote data are unrelated datasets with different freshness
+# needs (bills change daily; roll calls are comparatively rare), so they're
+# scraped and synced independently rather than coupled into one job.
+
+on:
+  # No blind schedule here anymore -- govinfo-billstatus-watcher.yml polls
+  # GovInfo's own batch-completion RSS feed every 15 minutes and triggers
+  # this job (via workflow_dispatch) only when a genuinely new batch has
+  # landed, instead of guessing a fixed interval and either lagging
+  # GovInfo's real ~4-hour cadence or running this when nothing changed.
+  workflow_dispatch:
+
+concurrency:
+  group: bill-watcher
+  cancel-in-progress: true
+
+env:
+  # 119th Congress = 2025-2026. Bump this at the start of each new Congress (odd years).
+  CURRENT_CONGRESS: 119
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      # Scraper output (data/ + cache/) persists across runs via this cache.
+      # govinfo's sitemap-based fetch (see below) already skips anything
+      # whose <lastmod> hasn't changed, so daily runs after the first are
+      # cheap incremental diffs, not a full re-download.
+      - name: Restore scraper working directory
+        uses: actions/cache@v4
+        with:
+          path: bill-scraper
+          key: bill-scraper-${{ env.CURRENT_CONGRESS }}-${{ github.run_id }}
+          restore-keys: |
+            bill-scraper-${{ env.CURRENT_CONGRESS }}-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Clone/update unitedstates/congress scraper
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxml2-dev libxslt1-dev libz-dev wget
+
+          if [ -d bill-scraper/.git ]; then
+            git -C bill-scraper fetch --depth=1 origin main
+            git -C bill-scraper reset --hard origin/main
+          else
+            rm -rf bill-scraper
+            git clone --depth=1 https://github.com/unitedstates/congress.git bill-scraper
+          fi
+
+          pip install -q ./bill-scraper
+          mkdir -p bill-scraper/data bill-scraper/cache
+
+      # Bill status comes from GovInfo's official bulk BILLSTATUS collection
+      # (public, no API key, no rate limit) — the same "cloner" pattern as
+      # votes, not a scrape of api.congress.gov. `bills` then parses those
+      # XML files into one data.json per bill (title, sponsor, actions,
+      # committees, summary — everything the feed and detail view need).
+      - name: Clone current-Congress bill status data
+        run: |
+          set -euo pipefail
+          cd bill-scraper
+          usc-run govinfo --bulkdata=BILLSTATUS --congress="${CURRENT_CONGRESS}"
+          usc-run bills --congress="${CURRENT_CONGRESS}"
+
+      # --exclude=.git keeps this workflow from touching the dataset-revision
+      # marker (`git rev-parse HEAD` on the synced tree) that
+      # rollcall-watcher.yml's own sync already owns for vote-data freshness
+      # checks — both workflows clone the same upstream scraper repo, and
+      # this dataset only needs bill-watcher's data/ output, not its .git.
+      - name: Sync bill data to server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz -4 --exclude=cache/ --exclude=.git/
+          path: bill-scraper/
+          remote_path: /home/ubuntu/us-congress-data/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
