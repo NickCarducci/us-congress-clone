@@ -6,6 +6,18 @@ name: Bill Data Watcher
 # bill data and vote data are unrelated datasets with different freshness
 # needs (bills change daily; roll calls are comparatively rare), so they're
 # scraped and synced independently rather than coupled into one job.
+#
+# Bill TEXT is deliberately NOT cloned here -- see bill-text-watcher.yml.
+# A first attempt at bundling both into this workflow caused a real
+# outage: bill text takes hours to backfill, but this workflow is
+# triggered every time govinfo-billstatus-watcher.yml sees a new
+# BILLSTATUS batch (every ~15 min at busiest) with cancel-in-progress
+# true -- every new trigger killed the still-running text backfill before
+# it could finish, forever. Bill status changes constantly and needs the
+# frequent trigger + cancel-in-progress; bill text, once a version is
+# printed, never changes again and needs neither. Splitting them into
+# workflows with independent concurrency groups and schedules fixes both
+# at once.
 
 on:
   # No blind schedule here anymore -- govinfo-billstatus-watcher.yml polls
@@ -31,7 +43,10 @@ jobs:
       # Scraper output (data/ + cache/) persists across runs via this cache.
       # govinfo's sitemap-based fetch (see below) already skips anything
       # whose <lastmod> hasn't changed, so daily runs after the first are
-      # cheap incremental diffs, not a full re-download.
+      # cheap incremental diffs, not a full re-download. Shared with
+      # bill-text-watcher.yml's cache (same key prefix) so both workflows
+      # build on the same scraper checkout + already-downloaded data
+      # instead of duplicating the clone/setup cost.
       - name: Restore scraper working directory
         uses: actions/cache@v4
         with:
@@ -74,75 +89,18 @@ jobs:
           usc-run govinfo --bulkdata=BILLSTATUS --congress="${CURRENT_CONGRESS}"
           usc-run bills --congress="${CURRENT_CONGRESS}"
 
-      # Full bill text, plain-text format. GovInfo's BILLS collection (the
-      # regular, non-bulk one -- distinct from --bulkdata=BILLS, "which has
-      # less in it" per govinfo.py's own comment) ships text/pdf/xml/mods
-      # per print version. --extract=text pulls the text format (GovInfo
-      # wraps it in HTML; the scraper auto-unwraps it into a plain
-      # document.txt alongside document.html) and --extract=mods pulls the
-      # per-version metadata (type/date) as its own data.json --
-      # get_output_path() for the BILLS collection places both under
-      # data/{congress}/bills/{type}/{type}{number}/text-versions/{version}/,
-      # right alongside the bill's own data.json, so no new directory
-      # convention to teach the backend. Deliberately NOT pulling pdf here
-      # -- plain text is a small fraction of the size (no embedded
-      # fonts/layout) and is what the app actually renders now (see
-      # BillTextViewerSheet), so there's no reason to also mirror the much
-      # larger PDF just to leave it unused.
-      #
-      # --congress does NOT scope this the way it does --bulkdata=BILLSTATUS
-      # above -- per govinfo.py's own header comment, --congress only
-      # applies to bulk data collections; --collections=BILLS is a regular
-      # (non-bulk) collection, scoped only by --years or --filter. Without
-      # this, the first attempt walked GovInfo's entire BILLS collection
-      # back to the 113th Congress (2013) and hit the 180-minute timeout
-      # without finishing.
-      #
-      # Two complementary filters, not redundant: --years skips walking the
-      # sitemap index for other years entirely (should_skip_sitemap checks
-      # this before even fetching a year's sitemap XML), while --filter
-      # skips downloading individual non-matching packages within a year's
-      # sitemap -- needed because a bill introduced late in the prior
-      # Congress can still get a matching-year print version, and CURRENT_
-      # CONGRESS_YEARS has to be updated every two years anyway, so
-      # --filter is the real correctness guarantee; --years is purely a
-      # speed-up on top of it.
-      #
-      # --filter is matched against `package_name`, which the collections
-      # sitemap-URL regex (`r"([^-]+)-(.*)"` in govinfo.py) has ALREADY
-      # split the "BILLS-" collection prefix off of -- so despite the
-      # doc comment's own example reading "BILLS-113hconres66ih", the
-      # string actually compared is just "113hconres66ih" (no "BILLS-").
-      # A first attempt using "^BILLS-119" as the pattern therefore matched
-      # nothing at all: the step finished in ~1s having listed the two
-      # year-sitemaps and downloaded zero packages, silently. Confirmed by
-      # inspecting govinfo.py directly and by that run's own timing.
-      - name: Clone current-Congress bill text (plain text)
-        env:
-          # 119th Congress = 2025-2026 -- keep in sync with CURRENT_CONGRESS
-          # above (both bump together at the start of each new Congress).
-          CURRENT_CONGRESS_YEARS: "2025,2026"
-        run: |
-          set -euo pipefail
-          cd bill-scraper
-          usc-run govinfo --collections=BILLS --years="${CURRENT_CONGRESS_YEARS}" --filter="^${CURRENT_CONGRESS}" --extract=mods,text
-
       # --exclude=.git keeps this workflow from touching the dataset-revision
       # marker (`git rev-parse HEAD` on the synced tree) that
       # rollcall-watcher.yml's own sync already owns for vote-data freshness
       # checks — both workflows clone the same upstream scraper repo, and
       # this dataset only needs bill-watcher's data/ output, not its .git.
+      # No --delete flag, so this never removes bill-text-watcher.yml's
+      # text-versions/ output even though this workflow's own bill-scraper
+      # checkout doesn't populate it.
       - name: Sync bill data to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
-          # package.zip is the raw per-version archive (PDF+XML+HTML+MODS+
-          # PREMIS all bundled) the govinfo step above downloads before
-          # extracting from it -- document.txt is already extracted out of
-          # it, so there's no reason to also ship the much larger original
-          # archive to the server. document.html is the pre-unwrap wrapped
-          # copy of the same text as document.txt -- redundant once
-          # unwrapped.
-          switches: -avz -4 --exclude=cache/ --exclude=.git/ --exclude=package.zip --exclude=document.html
+          switches: -avz -4 --exclude=cache/ --exclude=.git/
           path: bill-scraper/
           remote_path: /home/ubuntu/us-congress-data/
           remote_host: ${{ secrets.SCYTALE_HOST }}

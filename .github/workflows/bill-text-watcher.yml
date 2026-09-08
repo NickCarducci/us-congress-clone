@@ -1,0 +1,131 @@
+name: Bill Text Watcher
+
+# Split out of bill-watcher.yml on purpose: bill TEXT, once a version is
+# printed, never changes again -- unlike bill status, which changes
+# constantly and needs a frequent, cancel-and-restart trigger (see
+# govinfo-billstatus-watcher.yml). Bundling both into one workflow caused
+# a real outage: the first attempt, sharing bill-watcher.yml's
+# cancel-in-progress concurrency group, was killed every ~15-60 minutes by
+# a new BILLSTATUS-triggered run before the multi-hour text backfill could
+# ever finish, in a loop with no way to complete. This workflow has its
+# own concurrency group (queues rather than cancels) and its own light,
+# infrequent schedule, so a long-running backfill is never interrupted by
+# an unrelated bill-status update.
+#
+# A full current-Congress backfill may take multiple runs to complete --
+# each run's govinfo step incrementally resumes via the cached
+# bill-scraper/cache/ lastmod markers (same mechanism bill-watcher.yml's
+# BILLSTATUS step already relies on), so a run that doesn't finish within
+# the timeout below simply picks up next time from wherever it left off,
+# rather than starting over.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bill-text-watcher
+  # Deliberately NOT cancel-in-progress -- see the note above. A new
+  # trigger while a backfill is still running should queue behind it, not
+  # kill hours of progress.
+  cancel-in-progress: false
+
+env:
+  # 119th Congress = 2025-2026. Bump this (and CURRENT_CONGRESS_YEARS
+  # below) at the start of each new Congress (odd years).
+  CURRENT_CONGRESS: 119
+  CURRENT_CONGRESS_YEARS: "2025,2026"
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # Near GitHub Actions' per-job ceiling, to maximize how much of a
+    # from-scratch backfill can complete in a single run.
+    timeout-minutes: 340
+    steps:
+      # Same cache key prefix as bill-watcher.yml on purpose -- both
+      # workflows build on the same scraper checkout + already-downloaded
+      # BILLSTATUS data instead of duplicating the clone/setup cost.
+      - name: Restore scraper working directory
+        uses: actions/cache@v4
+        with:
+          path: bill-scraper
+          key: bill-scraper-${{ env.CURRENT_CONGRESS }}-${{ github.run_id }}
+          restore-keys: |
+            bill-scraper-${{ env.CURRENT_CONGRESS }}-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Clone/update unitedstates/congress scraper
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxml2-dev libxslt1-dev libz-dev wget
+
+          if [ -d bill-scraper/.git ]; then
+            git -C bill-scraper fetch --depth=1 origin main
+            git -C bill-scraper reset --hard origin/main
+          else
+            rm -rf bill-scraper
+            git clone --depth=1 https://github.com/unitedstates/congress.git bill-scraper
+          fi
+
+          pip install -q ./bill-scraper
+          mkdir -p bill-scraper/data bill-scraper/cache
+
+      # Full bill text, plain-text format. GovInfo's BILLS collection (the
+      # regular, non-bulk one -- distinct from --bulkdata=BILLS, "which has
+      # less in it" per govinfo.py's own comment) ships text/pdf/xml/mods
+      # per print version. --extract=text pulls the text format (GovInfo
+      # wraps it in HTML; the scraper auto-unwraps it into a plain
+      # document.txt alongside document.html) and --extract=mods pulls the
+      # per-version metadata as its own data.json -- get_output_path() for
+      # the BILLS collection places both under
+      # data/{congress}/bills/{type}/{type}{number}/text-versions/{version}/,
+      # right alongside the bill's own data.json from bill-watcher.yml, so
+      # no new directory convention to teach the backend. Deliberately NOT
+      # pulling pdf -- plain text is a small fraction of the size (no
+      # embedded fonts/layout) and is what the app actually renders (see
+      # BillTextViewerSheet), so there's no reason to also mirror the much
+      # larger PDF just to leave it unused.
+      #
+      # --congress does NOT scope --collections=BILLS the way it scopes
+      # --bulkdata=BILLSTATUS -- per govinfo.py's own header comment,
+      # --congress only applies to bulk data collections. --years skips
+      # walking other years' sitemap indexes entirely (the real speed-up);
+      # --filter="^${CURRENT_CONGRESS}" matches package_name (which the
+      # collections sitemap-URL regex has ALREADY stripped the "BILLS-"
+      # prefix off of, despite govinfo.py's own doc comment example
+      # reading "BILLS-113hconres66ih") -- the real correctness guarantee,
+      # since a bill from the tail end of the prior Congress can still get
+      # a matching-year print version. Confirmed via two failed attempts:
+      # --congress alone walked all BILLS packages back to the 113th
+      # Congress (2013) and timed out; --filter="^BILLS-119" matched
+      # nothing (finished in ~1s, zero downloads) because of the stripped
+      # prefix.
+      - name: Clone current-Congress bill text (plain text)
+        run: |
+          set -euo pipefail
+          cd bill-scraper
+          usc-run govinfo --collections=BILLS --years="${CURRENT_CONGRESS_YEARS}" --filter="^${CURRENT_CONGRESS}" --extract=mods,text
+
+      - name: Sync bill text to server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          # package.zip is the raw per-version archive (PDF+XML+HTML+MODS+
+          # PREMIS all bundled) the govinfo step above downloads before
+          # extracting from it -- document.txt is already extracted out of
+          # it, so there's no reason to also ship the much larger original
+          # archive to the server. document.html is the pre-unwrap wrapped
+          # copy of the same text as document.txt -- redundant once
+          # unwrapped.
+          switches: -avz -4 --exclude=cache/ --exclude=.git/ --exclude=package.zip --exclude=document.html
+          path: bill-scraper/
+          remote_path: /home/ubuntu/us-congress-data/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
