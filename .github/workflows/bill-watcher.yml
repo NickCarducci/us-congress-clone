@@ -101,13 +101,22 @@ jobs:
       # Two complementary filters, not redundant: --years skips walking the
       # sitemap index for other years entirely (should_skip_sitemap checks
       # this before even fetching a year's sitemap XML), while --filter
-      # (matched against the package name, e.g. "BILLS-119hr1234ih") skips
-      # downloading individual non-matching packages within a year's
+      # skips downloading individual non-matching packages within a year's
       # sitemap -- needed because a bill introduced late in the prior
       # Congress can still get a matching-year print version, and CURRENT_
       # CONGRESS_YEARS has to be updated every two years anyway, so
       # --filter is the real correctness guarantee; --years is purely a
       # speed-up on top of it.
+      #
+      # --filter is matched against `package_name`, which the collections
+      # sitemap-URL regex (`r"([^-]+)-(.*)"` in govinfo.py) has ALREADY
+      # split the "BILLS-" collection prefix off of -- so despite the
+      # doc comment's own example reading "BILLS-113hconres66ih", the
+      # string actually compared is just "113hconres66ih" (no "BILLS-").
+      # A first attempt using "^BILLS-119" as the pattern therefore matched
+      # nothing at all: the step finished in ~1s having listed the two
+      # year-sitemaps and downloaded zero packages, silently. Confirmed by
+      # inspecting govinfo.py directly and by that run's own timing.
       - name: Clone current-Congress bill text (plain text)
         env:
           # 119th Congress = 2025-2026 -- keep in sync with CURRENT_CONGRESS
@@ -116,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           cd bill-scraper
-          usc-run govinfo --collections=BILLS --years="${CURRENT_CONGRESS_YEARS}" --filter="^BILLS-${CURRENT_CONGRESS}" --extract=mods,text
+          usc-run govinfo --collections=BILLS --years="${CURRENT_CONGRESS_YEARS}" --filter="^${CURRENT_CONGRESS}" --extract=mods,text
 
       # --exclude=.git keeps this workflow from touching the dataset-revision
       # marker (`git rev-parse HEAD` on the synced tree) that
