@@ -6,10 +6,19 @@ name: GovInfo BILLSTATUS RSS Watcher
 # only once an update job actually completes (confirmed live: batches land
 # roughly every 4 hours, occasionally with longer gaps when nothing
 # changed). Polling that feed every 15 minutes and only triggering the real
-# scrape (bill-watcher.yml) when a genuinely new batch shows up means we
-# never lag GovInfo's own freshness by more than ~15 minutes, and we never
-# run the heavy job when there's nothing new to fetch -- cheaper AND
-# fresher than a blind fixed-interval cron.
+# scrapes when a genuinely new batch shows up means we never lag GovInfo's
+# own freshness by more than ~15 minutes, and we never run the heavy jobs
+# when there's nothing new to fetch -- cheaper AND fresher than a blind
+# fixed-interval cron.
+#
+# Triggers both bill-watcher.yml (status) and bill-text-watcher.yml (text):
+# a new print version becoming available is itself a BILLSTATUS change for
+# that bill -- the same <textVersions> element bill-text-watcher.yml's data
+# comes from -- so this one signal covers both. bill-text-watcher.yml's own
+# concurrency group queues rather than cancels, so triggering it this often
+# is safe even while a previous (now-rare, since the initial backfill
+# finished) longer sync is still running -- unlike bill-watcher.yml before
+# the two were split into separate concurrency groups.
 
 on:
   schedule:
@@ -70,8 +79,10 @@ jobs:
             echo "new_batch=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Trigger bill-watcher.yml
+      - name: Trigger bill-watcher.yml and bill-text-watcher.yml
         if: steps.check.outputs.new_batch == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run bill-watcher.yml --repo "${{ github.repository }}"
+        run: |
+          gh workflow run bill-watcher.yml --repo "${{ github.repository }}"
+          gh workflow run bill-text-watcher.yml --repo "${{ github.repository }}"

@@ -1,23 +1,31 @@
 name: Bill Text Watcher
 
-# Split out of bill-watcher.yml on purpose: bill TEXT, once a version is
-# printed, never changes again -- unlike bill status, which changes
-# constantly and needs a frequent, cancel-and-restart trigger (see
-# govinfo-billstatus-watcher.yml). Bundling both into one workflow caused
-# a real outage: the first attempt, sharing bill-watcher.yml's
-# cancel-in-progress concurrency group, was killed every ~15-60 minutes by
-# a new BILLSTATUS-triggered run before the multi-hour text backfill could
-# ever finish, in a loop with no way to complete. This workflow has its
-# own concurrency group (queues rather than cancels) and its own light,
-# infrequent schedule, so a long-running backfill is never interrupted by
-# an unrelated bill-status update.
+# Split out of bill-watcher.yml on purpose: the FIRST attempt bundled bill
+# text into that workflow and shared its cancel-in-progress concurrency
+# group, which caused a real outage -- a new BILLSTATUS-triggered run
+# killed the still-running, multi-hour text backfill every ~15-60 minutes,
+# in a loop with no way to ever complete. This workflow has its own
+# concurrency group (queues rather than cancels), so a long-running sync
+# here is never interrupted by an unrelated trigger.
+#
+# Triggered primarily by govinfo-billstatus-watcher.yml, alongside
+# bill-watcher.yml, on every new BILLSTATUS batch: a new print version
+# becoming available IS a BILLSTATUS change for that bill (the same
+# <textVersions> element bill-text-watcher's data comes from), so the same
+# ~15-minute-latency signal that keeps bill status fresh also covers text
+# -- no separate freshness mechanism needed once the initial backfill is
+# done and incremental runs are fast. The schedule below is a backup only,
+# for whenever the poller itself is down or GitHub drops a scheduled tick,
+# not the primary way this gets triggered.
 #
 # A full current-Congress backfill may take multiple runs to complete --
 # each run's govinfo step incrementally resumes via the cached
 # bill-scraper/cache/ lastmod markers (same mechanism bill-watcher.yml's
 # BILLSTATUS step already relies on), so a run that doesn't finish within
 # the timeout below simply picks up next time from wherever it left off,
-# rather than starting over.
+# rather than starting over. (Confirmed: the actual first backfill
+# completed in ~3h08m, well inside the timeout, syncing 21,554 bill-text
+# versions.)
 
 on:
   schedule:
