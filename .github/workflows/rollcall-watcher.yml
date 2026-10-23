@@ -25,30 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - name: Restore last seen commit
-        uses: actions/cache@v4
-        with:
-          path: .cache/usc
-          key: usc-head-${{ github.run_id }}
-          restore-keys: |
-            usc-head-
-
-      - name: Fetch upstream head
-        id: head
-        run: |
-          set -euo pipefail
-          mkdir -p .cache/usc
-          CURRENT=$(git ls-remote https://github.com/unitedstates/congress.git HEAD | cut -f1)
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
-          if [ -f .cache/usc/head.txt ]; then
-            PREV=$(cat .cache/usc/head.txt)
-          else
-            PREV=""
-          fi
-          echo "previous=$PREV" >> "$GITHUB_OUTPUT"
-
       # Scraper output (data/ + cache/) persists across runs via this cache so
-      # monthly runs only fetch roll calls that are new since last time —
+      # daily runs only fetch roll calls that are new since last time —
       # the scraper skips anything already in cache/ unless --force is passed.
       - name: Restore scraper working directory
         uses: actions/cache@v4
@@ -267,6 +245,23 @@ jobs:
           print(f'Enriched {len(bioguides)} profiles with sponsorship counts')
           "
 
+      - name: Record the dataset revision
+        run: |
+          python3 - <<'PYTHON'
+          import datetime, hashlib, json, os
+          from pathlib import Path
+          root = Path('congress-scraper')
+          files = list((root / 'data' / os.environ['CURRENT_CONGRESS'] / 'votes').glob('**/data.json'))
+          files += [root / 'legislators-profiles.json', root / 'legislators-lis-to-bioguide.json']
+          digest = hashlib.sha256()
+          for path in sorted(files):
+              digest.update(str(path.relative_to(root)).encode() + b'\0')
+              digest.update(path.read_bytes())
+              digest.update(b'\0')
+          marker = {'sha256': digest.hexdigest(), 'updatedAt': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          (root / '.populist-dataset-revision.json').write_text(json.dumps(marker))
+          PYTHON
+
       - name: Sync scraped data to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
@@ -277,7 +272,7 @@ jobs:
           remote_user: ubuntu
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
 
-      - name: Trigger index pipeline on change
+      - name: Refresh the index pipeline
         env:
           WEBHOOK_URL: ${{ secrets.ROLLCALL_WEBHOOK_URL }}
           WEBHOOK_SECRET: ${{ secrets.ROLLCALL_WEBHOOK_SECRET }}
@@ -287,10 +282,9 @@ jobs:
             echo "Missing ROLLCALL_WEBHOOK_URL or ROLLCALL_WEBHOOK_SECRET" >&2
             exit 1
           fi
-          curl -sS -X POST \
+          curl -sS --fail-with-body -X POST \
             -H "x-webhook-secret: ${WEBHOOK_SECRET}" \
             -H "Content-Type: application/json" \
             -d '{}' \
             "${WEBHOOK_URL}"
-          echo "${{ steps.head.outputs.current }}" > .cache/usc/head.txt
 
