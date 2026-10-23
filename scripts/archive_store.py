@@ -217,7 +217,9 @@ def main():
     if args.operation == 'bundles':
         import gzip
         with tempfile.TemporaryDirectory() as temporary:
+            count = 0
             for name, bundle in text_bundles(args.root, args.congress):
+                count += 1
                 content = json.dumps(bundle, ensure_ascii=False).encode()
                 if len(content) > 64 * 1024 * 1024:
                     raise ValueError(f'Text lookup bundle exceeds reader limit: {name}')
@@ -227,6 +229,8 @@ def main():
                     raise ValueError(f'Compressed text bundle exceeds reader limit: {name}')
                 path.write_bytes(encoded)
                 gh('release', 'upload', tag, str(path), '--repo', repo, '--clobber')
+            if count == 0:
+                raise ValueError('No text lookup bundles were produced')
         return
     previous = read_manifest(repo, tag, args.kind)
     if previous:
