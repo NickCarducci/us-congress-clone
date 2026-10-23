@@ -1,0 +1,141 @@
+name: Historical Legislation Archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        type: choice
+        options: [both, status, text]
+        default: both
+      first_congress:
+        description: 'Optional narrower starting Congress (status earliest 108; text earliest 103)'
+        required: false
+      last_congress:
+        description: 'Optional final Congress (empty = current)'
+        required: false
+      refresh_completed:
+        description: 'Refresh completed historical snapshots as well as incomplete ones'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 3 1 * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: legislation-archive
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          DATASET: ${{ inputs.dataset || 'both' }}
+          FIRST_CONGRESS: ${{ inputs.first_congress }}
+          LAST_CONGRESS: ${{ inputs.last_congress }}
+          REFRESH: ${{ inputs.refresh_completed }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os
+          today = datetime.date.today()
+          current = (today.year - 1789) // 2 + 1 - int(today.year % 2 == 1 and today < datetime.date(today.year, 1, 3))
+          last = int(os.environ['LAST_CONGRESS'] or current)
+          first = int(os.environ['FIRST_CONGRESS'] or 103)
+          if not 103 <= first <= last <= current:
+              raise SystemExit('Invalid Congress range')
+          jobs = []
+          for kind, earliest in [('status', 108), ('text', 103)]:
+              if os.environ['DATASET'] not in ('both', kind):
+                  continue
+              for congress in range(max(first, earliest), last + 1):
+                  jobs.append({'kind': kind, 'congress': congress, 'years': f'{1789 + (congress - 1) * 2},{1790 + (congress - 1) * 2}', 'refresh': 'true' if congress == current or os.environ['REFRESH'] == 'true' else 'false'})
+          if not jobs:
+              raise SystemExit('No datasets are available in that Congress range')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps({'include': jobs}) + '\n')
+          PY
+
+  archive:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONGRESS: ${{ matrix.congress }}
+      DATASET: ${{ matrix.kind }}
+      YEARS: ${{ matrix.years }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test archive integrity and resume behavior
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Check published checkpoint
+        id: checkpoint
+        run: python3 scripts/archive_store.py inspect --kind "$DATASET" --congress "$CONGRESS" --refresh '${{ matrix.refresh }}'
+      - uses: actions/setup-python@v5
+        if: steps.checkpoint.outputs.skip != 'true'
+        with:
+          python-version: '3.11'
+      - name: Install existing public scraper
+        if: steps.checkpoint.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxml2-dev libxslt1-dev libz-dev wget
+          git clone --depth 1 https://github.com/unitedstates/congress.git bill-scraper
+          pip install -q ./bill-scraper
+          mkdir -p bill-scraper/data bill-scraper/cache
+      - name: Restore release checkpoint
+        id: restore
+        if: steps.checkpoint.outputs.skip != 'true'
+        run: python3 scripts/archive_store.py restore --kind "$DATASET" --congress "$CONGRESS"
+      - name: Fetch official records within a checkpoint window
+        id: scrape
+        if: steps.checkpoint.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+        run: |
+          set -euo pipefail
+          cd bill-scraper
+          if [ "$DATASET" = status ]; then
+            timeout --signal=INT --kill-after=90s 240m usc-run govinfo --bulkdata=BILLSTATUS --congress="$CONGRESS"
+            timeout --signal=INT --kill-after=90s 20m usc-run bills --congress="$CONGRESS"
+          else
+            timeout --signal=INT --kill-after=90s 240m usc-run govinfo --collections=BILLS --years="$YEARS" --filter="^${CONGRESS}" --extract=mods,text --patch=archive_resume
+          fi
+      - name: Publish checksummed release checkpoint
+        if: always() && !cancelled() && steps.restore.outcome == 'success' && (steps.scrape.outcome == 'success' || steps.scrape.outcome == 'failure')
+        run: python3 scripts/archive_store.py publish --kind "$DATASET" --congress "$CONGRESS" --complete false
+      - name: Publish text lookup bundles
+        if: matrix.kind == 'text' && steps.scrape.outcome == 'success'
+        run: python3 scripts/archive_store.py bundles --kind text --congress "$CONGRESS"
+      - name: Export compact browsing metadata
+        if: (matrix.kind == 'status' || matrix.congress < 108) && steps.scrape.outcome == 'success'
+        run: python3 scripts/archive_store.py export --kind "$DATASET" --congress "$CONGRESS"
+      - name: Sync compact browsing metadata to existing server
+        if: (matrix.kind == 'status' || matrix.congress < 108) && steps.scrape.outcome == 'success'
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz -4
+          path: compact-mirror/
+          remote_path: /home/ubuntu/us-congress-data/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
+      - name: Finalize completed archive
+        if: success() && steps.scrape.outcome == 'success'
+        run: python3 scripts/archive_store.py finish --kind "$DATASET" --congress "$CONGRESS"
+      - name: Mark an incomplete checkpoint for retry
+        if: steps.scrape.outcome == 'failure'
+        run: |
+          echo 'Progress is saved in Releases. Rerun failed jobs to resume.' >&2
+          exit 1

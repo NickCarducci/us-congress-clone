@@ -36,6 +36,9 @@ on:
         description: 'Congress to mirror (empty = current Congress)'
         required: false
 
+permissions:
+  contents: write
+
 concurrency:
   group: bill-text-watcher
   # Deliberately NOT cancel-in-progress -- see the note above. A new
@@ -56,6 +59,7 @@ jobs:
     # from-scratch backfill can complete in a single run.
     timeout-minutes: 340
     steps:
+      - uses: actions/checkout@v4
       # Same cache key prefix as bill-watcher.yml on purpose -- both
       # workflows build on the same scraper checkout + already-downloaded
       # BILLSTATUS data instead of duplicating the clone/setup cost.
@@ -72,7 +76,7 @@ jobs:
               raise SystemExit('Invalid Congress')
           year = 1789 + (congress - 1) * 2
           with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write(f'CURRENT_CONGRESS={congress}\nCURRENT_CONGRESS_YEARS={year},{year + 1}\n')
+              output.write(f'CURRENT_CONGRESS={congress}\nCURRENT_CONGRESS_YEARS={year},{year + 1}\nSYNC_TEXT_TO_SERVER={str(congress == current).lower()}\n')
           PYTHON
 
       - name: Restore scraper working directory
@@ -141,7 +145,16 @@ jobs:
           cd bill-scraper
           usc-run govinfo --collections=BILLS --years="${CURRENT_CONGRESS_YEARS}" --filter="^${CURRENT_CONGRESS}" --extract=mods,text
 
+      - name: Publish historical text in GitHub Releases
+        if: env.SYNC_TEXT_TO_SERVER != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/archive_store.py publish --kind text --congress "$CURRENT_CONGRESS" --complete false
+          python3 scripts/archive_store.py bundles --kind text --congress "$CURRENT_CONGRESS"
+          python3 scripts/archive_store.py finish --kind text --congress "$CURRENT_CONGRESS"
       - name: Sync bill text to server
+        if: env.SYNC_TEXT_TO_SERVER == 'true'
         uses: burnett01/rsync-deployments@7.0.1
         with:
           # package.zip is the raw per-version archive (PDF+XML+HTML+MODS+
