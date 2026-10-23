@@ -14,8 +14,8 @@ name: Bill Data Watcher
 # BILLSTATUS batch (every ~15 min at busiest) with cancel-in-progress
 # true -- every new trigger killed the still-running text backfill before
 # it could finish, forever. Bill status changes constantly and needs the
-# frequent trigger + cancel-in-progress; bill text, once a version is
-# printed, never changes again and needs neither. Splitting them into
+# frequent trigger; bill text, once a version is printed, never changes
+# again. Splitting them into
 # workflows with independent concurrency groups and schedules fixes both
 # at once.
 
@@ -33,7 +33,8 @@ on:
 
 concurrency:
   group: bill-watcher
-  cancel-in-progress: true
+  # A historical first import must finish even if a new batch arrives.
+  cancel-in-progress: false
 
 env:
   # 119th Congress = 2025-2026. Bump this at the start of each new Congress (odd years).
