@@ -26,6 +26,10 @@ on:
   # landed, instead of guessing a fixed interval and either lagging
   # GovInfo's real ~4-hour cadence or running this when nothing changed.
   workflow_dispatch:
+    inputs:
+      first_congress:
+        description: 'First Congress to mirror (empty = previous Congress)'
+        required: false
 
 concurrency:
   group: bill-watcher
@@ -47,6 +51,21 @@ jobs:
       # bill-text-watcher.yml's cache (same key prefix) so both workflows
       # build on the same scraper checkout + already-downloaded data
       # instead of duplicating the clone/setup cost.
+      - name: Select Congress window
+        env:
+          FIRST_CONGRESS: ${{ inputs.first_congress }}
+        run: |
+          python3 - <<'PYTHON'
+          import datetime, os
+          today = datetime.date.today()
+          current = (today.year - 1789) // 2 + 1 - int(today.year % 2 == 1 and today < datetime.date(today.year, 1, 3))
+          first = int(os.environ.get('FIRST_CONGRESS') or current - 1)
+          if not 93 <= first <= current:
+              raise SystemExit('Invalid first Congress')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'CURRENT_CONGRESS={current}\nFIRST_CONGRESS={first}\n')
+          PYTHON
+
       - name: Restore scraper working directory
         uses: actions/cache@v4
         with:
@@ -86,8 +105,10 @@ jobs:
         run: |
           set -euo pipefail
           cd bill-scraper
-          usc-run govinfo --bulkdata=BILLSTATUS --congress="${CURRENT_CONGRESS}"
-          usc-run bills --congress="${CURRENT_CONGRESS}"
+          for congress in $(seq "$FIRST_CONGRESS" "$CURRENT_CONGRESS"); do
+            usc-run govinfo --bulkdata=BILLSTATUS --congress="$congress"
+            usc-run bills --congress="$congress"
+          done
 
       # --exclude=.git keeps this workflow from touching the dataset-revision
       # marker (`git rev-parse HEAD` on the synced tree) that

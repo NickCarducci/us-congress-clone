@@ -8,16 +8,7 @@ on:
     # this clone is the only thing keeping someone who just left office
     # from still showing as a sitting member.
     #
-    # NOTE: the steps below that actually rebuild the profile dataset are
-    # gated on `steps.head` (see "Fetch upstream head"), which compares
-    # unitedstates/congress's own scraper-tool repo HEAD -- not
-    # congress-legislators' data repo. That's an imperfect proxy for "did
-    # legislator data actually change" and isn't fixed by this cron
-    # change alone; a daily check is still strictly better than monthly
-    # (cheap either way when the gate doesn't trip), but closing the gap
-    # to reliable ~1-day freshness needs that gating condition corrected
-    # too. Left as deliberate follow-up rather than a blind edit to a
-    # multi-step workflow with no way to dry-run it here.
+    # Government records change independently of the scraper source code.
     - cron: "0 6 * * *"
   workflow_dispatch:
 
@@ -60,7 +51,6 @@ jobs:
       # monthly runs only fetch roll calls that are new since last time —
       # the scraper skips anything already in cache/ unless --force is passed.
       - name: Restore scraper working directory
-        if: steps.head.outputs.current != steps.head.outputs.previous
         uses: actions/cache@v4
         with:
           path: congress-scraper
@@ -69,13 +59,11 @@ jobs:
             congress-scraper-${{ env.CURRENT_CONGRESS }}-
 
       - name: Set up Python
-        if: steps.head.outputs.current != steps.head.outputs.previous
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Scrape current Congress roll call votes
-        if: steps.head.outputs.current != steps.head.outputs.previous
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -104,7 +92,6 @@ jobs:
       # the indexer can resolve Senate voters the same way it already does
       # House ones (which use bioguide IDs directly).
       - name: Build LIS-to-bioguide lookup for Senate votes
-        if: steps.head.outputs.current != steps.head.outputs.previous
         run: |
           set -euo pipefail
           curl -sSL -o /tmp/legislators-current.yaml \
@@ -133,7 +120,6 @@ jobs:
       # photo, which theunitedstates.io serves as a static asset (no API key,
       # no rate limit) — so build it once here instead of calling out live.
       - name: Build member profile dataset
-        if: steps.head.outputs.current != steps.head.outputs.previous
         run: |
           set -euo pipefail
           python3 -c "
@@ -236,7 +222,6 @@ jobs:
       # key) instead of live per profile view, which is what caused this data
       # to go missing when profiles moved off the live API.
       - name: Enrich profiles with sponsorship counts
-        if: steps.head.outputs.current != steps.head.outputs.previous
         env:
           CONGRESS_API_KEY: ${{ secrets.CONGRESS_API_KEY }}
         run: |
@@ -283,7 +268,6 @@ jobs:
           "
 
       - name: Sync scraped data to server
-        if: steps.head.outputs.current != steps.head.outputs.previous
         uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -avz -4 --exclude=cache/
@@ -294,7 +278,6 @@ jobs:
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
 
       - name: Trigger index pipeline on change
-        if: steps.head.outputs.current != steps.head.outputs.previous
         env:
           WEBHOOK_URL: ${{ secrets.ROLLCALL_WEBHOOK_URL }}
           WEBHOOK_SECRET: ${{ secrets.ROLLCALL_WEBHOOK_SECRET }}
