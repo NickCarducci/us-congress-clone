@@ -129,7 +129,7 @@ jobs:
           remote_user: ubuntu
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
 
-      - name: Refresh searchable catalogs after bill sync
+      - name: Prepare searchable catalogs after bill sync
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SCYTALE_HOST }}
@@ -139,5 +139,5 @@ jobs:
           script: |
             set -eu
             for congress in $(seq "$FIRST_CONGRESS" "$CURRENT_CONGRESS"); do
-              touch "/home/ubuntu/us-congress-data/data/$congress/.populist-catalog-ready"
+              node /home/ubuntu/microservice/Consumers/POP-U-LIST/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$congress"
             done

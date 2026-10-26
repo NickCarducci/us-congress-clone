@@ -131,7 +131,7 @@ jobs:
           remote_host: ${{ secrets.SCYTALE_HOST }}
           remote_user: ubuntu
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
-      - name: Refresh the searchable catalog after metadata sync
+      - name: Prepare the searchable catalog after metadata sync
         if: (matrix.kind == 'status' || matrix.congress < 108) && steps.scrape.outcome == 'success'
         uses: appleboy/ssh-action@v1
         env:
@@ -143,7 +143,7 @@ jobs:
           envs: ARCHIVE_CONGRESS
           script: |
             set -eu
-            touch "/home/ubuntu/us-congress-data/data/$ARCHIVE_CONGRESS/.populist-catalog-ready"
+            node /home/ubuntu/microservice/Consumers/POP-U-LIST/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$ARCHIVE_CONGRESS"
       - name: Finalize completed archive
         if: success() && steps.scrape.outcome == 'success'
         run: python3 scripts/archive_store.py finish --kind "$DATASET" --congress "$CONGRESS"
