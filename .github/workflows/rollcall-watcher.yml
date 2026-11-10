@@ -274,7 +274,7 @@ jobs:
 
       - name: Refresh the index pipeline
         env:
-          WEBHOOK_URL: ${{ secrets.ROLLCALL_WEBHOOK_URL }}
+          WEBHOOK_URL: https://vote.youinpolitics.com/api/internal/rollcall/index/congress/current/webhook
           WEBHOOK_SECRET: ${{ secrets.ROLLCALL_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
@@ -287,4 +287,3 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{}' \
             "${WEBHOOK_URL}"
-
