@@ -28,7 +28,12 @@ on:
   workflow_dispatch:
     inputs:
       first_congress:
-        description: 'First Congress to mirror (empty = previous Congress)'
+        # Prior Congresses are imported in resumable batches by
+        # legislation-archive.yml. Re-scanning the previous Congress here on
+        # every BILLSTATUS batch cost ~2h45m per run (19,315 files for the
+        # 118th), pushed every run past the timeout and stalled the feed
+        # after Oct 28 2026. Only set this for a one-off manual backfill.
+        description: 'First Congress to mirror (empty = current Congress only)'
         required: false
 
 concurrency:
@@ -60,15 +65,19 @@ jobs:
           import datetime, os
           today = datetime.date.today()
           current = (today.year - 1789) // 2 + 1 - int(today.year % 2 == 1 and today < datetime.date(today.year, 1, 3))
-          first = int(os.environ.get('FIRST_CONGRESS') or current - 1)
+          first = int(os.environ.get('FIRST_CONGRESS') or current)
           if not 93 <= first <= current:
               raise SystemExit('Invalid first Congress')
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write(f'CURRENT_CONGRESS={current}\nFIRST_CONGRESS={first}\n')
           PYTHON
 
+      # Restore and save are separate steps so a run that fails or times
+      # out still saves what it downloaded (actions/cache saves only after
+      # a successful job). The next run resumes from those lastmod markers
+      # instead of starting over, so a large catch-up spreads across runs.
       - name: Restore scraper working directory
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: bill-scraper
           key: bill-scraper-${{ env.CURRENT_CONGRESS }}-${{ github.run_id }}
@@ -103,13 +112,24 @@ jobs:
       # XML files into one data.json per bill (title, sponsor, actions,
       # committees, summary — everything the feed and detail view need).
       - name: Clone current-Congress bill status data
+        id: clone
+        # Leaves time for the cache save below before the job timeout.
+        timeout-minutes: 160
         run: |
           set -euo pipefail
           cd bill-scraper
-          for congress in $(seq "$FIRST_CONGRESS" "$CURRENT_CONGRESS"); do
+          # Current Congress first, so a manual backfill never delays it.
+          for congress in $(seq "$CURRENT_CONGRESS" -1 "$FIRST_CONGRESS"); do
             usc-run govinfo --bulkdata=BILLSTATUS --congress="$congress"
             usc-run bills --congress="$congress"
           done
+
+      - name: Save scraper progress
+        if: always() && steps.clone.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: bill-scraper
+          key: bill-scraper-${{ env.CURRENT_CONGRESS }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # --exclude=.git keeps this workflow from touching the dataset-revision
       # marker (`git rev-parse HEAD` on the synced tree) that

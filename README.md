@@ -20,10 +20,12 @@ minutes quota.
   [BILLSTATUS batch-notification RSS feed](https://www.govinfo.gov/rss/billstatus-batch.xml)
   every 15 minutes (matching the feed's own declared `<ttl>`) and triggers
   `bill-watcher.yml` only when a genuinely new batch has completed.
-- **`bill-watcher.yml`** — clones the current and previous Congress' bill-status bulk
+- **`bill-watcher.yml`** — clones the current Congress' bill-status bulk
   data (GovInfo's `BILLSTATUS` collection) and syncs it to the server.
   Triggered by the watcher above, or manually via `workflow_dispatch`.
-  `first_congress` can extend the backfill further; incremental runs reuse the cache.
+  Prior Congresses come from `legislation-archive.yml`; `first_congress` is only
+  for a one-off manual backfill. Progress is cached even when a run times out,
+  so the next run resumes.
 - **`bill-text-watcher.yml`** — mirrors printed bill text separately so status
   refreshes do not interrupt a long text backfill. Its optional `congress` input
   supports historical backfills; daily runs follow the current Congress.
