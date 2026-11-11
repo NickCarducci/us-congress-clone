@@ -95,8 +95,12 @@ jobs:
       - name: Clone/update unitedstates/congress scraper
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libxml2-dev libxslt1-dev libz-dev wget
+          # Build headers only matter if lxml has no prebuilt wheel (it has
+          # one for this Python), and wget ships with the runner image. A
+          # runner whose Ubuntu mirror can't be reached (2026-11-11: DNS
+          # failures for azure.archive.ubuntu.com) shouldn't fail the sync.
+          { sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-dev libxslt1-dev libz-dev wget; } \
+            || echo "::warning::apt-get failed; continuing with the runner's preinstalled packages"
 
           if [ -d bill-scraper/.git ]; then
             git -C bill-scraper fetch --depth=1 origin main
