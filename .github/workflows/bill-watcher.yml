@@ -50,6 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
+      # This repo, for scripts/ (the scraper patch). First, so it can't clean
+      # away the scraper directory restored from cache below.
+      - uses: actions/checkout@v4
       # Scraper output (data/ + cache/) persists across runs via this cache.
       # govinfo's sitemap-based fetch (see below) already skips anything
       # whose <lastmod> hasn't changed, so daily runs after the first are
@@ -107,6 +110,8 @@ jobs:
             git clone --depth=1 https://github.com/unitedstates/congress.git bill-scraper
           fi
 
+          # Fix records the upstream scraper can't parse (see scripts/patch_scraper.py).
+          python3 scripts/patch_scraper.py bill-scraper
           pip install -q ./bill-scraper
           mkdir -p bill-scraper/data bill-scraper/cache
 

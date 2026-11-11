@@ -95,6 +95,8 @@ jobs:
           { sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-dev libxslt1-dev libz-dev wget; } \
             || echo "::warning::apt-get failed; continuing with the runner's preinstalled packages"
           git clone --depth 1 https://github.com/unitedstates/congress.git bill-scraper
+          # Fix records the upstream scraper can't parse (see scripts/patch_scraper.py).
+          python3 scripts/patch_scraper.py bill-scraper
           pip install -q ./bill-scraper
           mkdir -p bill-scraper/data bill-scraper/cache
       - name: Restore release checkpoint

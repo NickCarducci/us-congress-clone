@@ -25,6 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
+      # This repo, for scripts/ (the scraper patch). First, so it can't clean
+      # away the scraper directory restored from cache below.
+      - uses: actions/checkout@v4
       # Scraper output (data/ + cache/) persists across runs via this cache so
       # daily runs only fetch roll calls that are new since last time —
       # the scraper skips anything already in cache/ unless --force is passed.
@@ -63,6 +66,8 @@ jobs:
           # invoking the raw ./run script directly fails with
           # "ModuleNotFoundError: No module named 'utils'" because congress/tasks/utils.py
           # is only import-reachable through the installed package, not the bare script.
+          # Fix records the upstream scraper can't parse (see scripts/patch_scraper.py).
+          python3 scripts/patch_scraper.py congress-scraper
           pip install -q ./congress-scraper
           mkdir -p congress-scraper/data congress-scraper/cache
           cd congress-scraper

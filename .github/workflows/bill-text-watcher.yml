@@ -110,6 +110,8 @@ jobs:
             git clone --depth=1 https://github.com/unitedstates/congress.git bill-scraper
           fi
 
+          # Fix records the upstream scraper can't parse (see scripts/patch_scraper.py).
+          python3 scripts/patch_scraper.py bill-scraper
           pip install -q ./bill-scraper
           mkdir -p bill-scraper/data bill-scraper/cache
 
