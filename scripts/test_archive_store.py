@@ -44,6 +44,20 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual((output / bill.relative_to(root) / 'populist-text-versions.xml').read_text(), '<textVersions><item>text</item></textVersions>')
             self.assertFalse(list(output.rglob('fdsys_billstatus.xml')))
 
+    def test_compact_export_takes_the_bills_text_versions_not_an_amendments(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'source'
+            bill = root / 'data/111/bills/hr/hr4783'
+            bill.mkdir(parents=True)
+            (bill / 'data.json').write_text('{"congress":111,"number":4783}')
+            (bill / 'fdsys_billstatus.xml').write_text(
+                '<bill><amendments><amendment><textVersions></textVersions></amendment></amendments>'
+                '<textVersions><item>enr</item></textVersions><latestAction/></bill>')
+            output = Path(temporary) / 'mirror'
+            archive_store.export_metadata(root, output, 111)
+            self.assertEqual((output / bill.relative_to(root) / 'populist-text-versions.xml').read_text(),
+                             '<textVersions><item>enr</item></textVersions>')
+
     def test_text_bundles_preserve_bill_and_print_version_boundaries(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

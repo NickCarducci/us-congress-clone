@@ -136,7 +136,12 @@ def export_metadata(root, destination, congress):
         shutil.copyfile(source, target)
         xml = source.with_name('fdsys_billstatus.xml')
         if xml.exists():
-            match = re.search(r'<textVersions>[\s\S]*?</textVersions>', xml.read_text())
+            # The bill's own <textVersions> follows </amendments>; each amendment
+            # carries its own earlier in the file, so the first match can be the
+            # wrong (often empty) list.
+            content = xml.read_text()
+            end = content.rfind('</amendments>')
+            match = re.search(r'<textVersions>[\s\S]*?</textVersions>', content[end:] if end >= 0 else content)
             target.with_name('populist-text-versions.xml').write_text(match.group(0) if match else '<textVersions/>')
         count += 1
     if count == 0:
