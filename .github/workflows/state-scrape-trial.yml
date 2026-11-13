@@ -12,6 +12,10 @@ on:
         description: Two-letter state code (lowercase), e.g. nj
         default: nj
         required: true
+      chamber:
+        description: Batch a slow state by chamber (upper or lower); empty scrapes both
+        default: ""
+        required: false
       extra:
         description: Extra os-update arguments (e.g. "session=2026"; otherwise the current session is picked)
         default: ""
@@ -21,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: state-scrape-${{ inputs.state }}
+  group: state-scrape-${{ inputs.state }}-${{ inputs.chamber }}
   cancel-in-progress: false
 
 env:
@@ -31,7 +35,7 @@ env:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 360   # GitHub-hosted runners' ceiling for one job
     steps:
       - name: Check out this repository (session picker)
         uses: actions/checkout@v4
@@ -76,10 +80,13 @@ jobs:
 
       - name: Scrape bills (no database)
         id: scrape
+        # Stops 15 minutes before the job does, so the output is still packed and kept.
+        timeout-minutes: 345
         env:
           STATE: ${{ inputs.state }}
           EXTRA: ${{ inputs.extra }}
           SESSION: ${{ steps.session.outputs.args }}
+          CHAMBER: ${{ inputs.chamber && format('chamber={0}', inputs.chamber) || '' }}
         run: |
           mkdir -p out
           start=$(date +%s)
@@ -87,10 +94,10 @@ jobs:
           if [ "$STATE" = ca ]; then
             # Starts MariaDB, downloads and loads CA's export, then runs os-update ca "$@".
             docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
-              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $CHAMBER $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
           else
             docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint os-update \
-              os-scrapers "$STATE" bills $SESSION $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+              os-scrapers "$STATE" bills $SESSION $CHAMBER $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
           fi
           status=${PIPESTATUS[0]}
           set -e
@@ -98,7 +105,7 @@ jobs:
           bills=$(find out -name 'bill_*.json' | wc -l)
           echo "elapsed=$elapsed" >> "$GITHUB_OUTPUT"
           {
-            echo "### $STATE bill scrape"
+            echo "### $STATE ${CHAMBER#chamber=} bill scrape"
             echo "- exit status: $status"
             echo "- elapsed: $((elapsed / 60)) min $((elapsed % 60)) s"
             echo "- bill files: $bills"
@@ -109,12 +116,12 @@ jobs:
       - name: Pack the output
         if: always()
         # Some file names carry colons (jurisdiction IDs), which artifacts reject.
-        run: tar -czf scrape-${{ inputs.state }}.tgz out scrape.log
+        run: tar -czf scrape-${{ inputs.state }}${{ inputs.chamber }}.tgz out scrape.log
 
       - name: Keep the output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scrape-${{ inputs.state }}
-          path: scrape-${{ inputs.state }}.tgz
+          name: scrape-${{ inputs.state }}${{ inputs.chamber }}
+          path: scrape-${{ inputs.state }}${{ inputs.chamber }}.tgz
           retention-days: 7
