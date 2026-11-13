@@ -18,6 +18,15 @@ PATCHES = [
      '''{"Senate": "upper", "House": "lower", None: "legislature"}[
                 (chamber_td.text or "").strip() or None
             ]'''),
+    # Connecticut's bulk CSVs now start with a UTF-8 byte-order mark, so the
+    # first column read as "\ufeffcomm_code" (KeyError: 'comm_code').
+    ("scrapers/ct/utils.py",
+     '''        text = data.content.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.content.decode("cp1252", errors="replace")''',
+     '''        text = data.content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = data.content.decode("cp1252", errors="replace").removeprefix("\u00ef\u00bb\u00bf")'''),
     # Maryland's site lists a 2027 regular and a 2026 special session the
     # scraper's metadata doesn't have yet; os-update refuses to run until every
     # listed session is known. Ignore them until upstream adds them.
