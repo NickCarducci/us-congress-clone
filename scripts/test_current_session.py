@@ -28,6 +28,17 @@ class CurrentSession(unittest.TestCase):
     def test_a_running_special_session_is_current(self):
         self.assertEqual(module.current(FL, datetime.date(2026, 4, 22)), "2026A")
 
+    def test_undated_newer_sessions_still_count_as_the_latest(self):
+        tx = [{"identifier": "86", "classification": "primary", "start_date": "2019-01-08", "end_date": "2019-05-27"},
+              {"identifier": "89", "classification": "primary"},
+              {"identifier": "891", "classification": "special"}]
+        self.assertEqual(module.current(tx, datetime.date(2026, 11, 13)), "89")
+
+    def test_an_open_ended_special_session_is_not_taken_as_running(self):
+        mn = [{"identifier": "2025-2026", "classification": "primary", "start_date": "2025-01-14"},
+              {"identifier": "2025s1", "classification": "special", "start_date": "2025-06-09"}]
+        self.assertEqual(module.current(mn, datetime.date(2026, 11, 13)), "2025-2026")
+
     def test_a_running_primary_wins(self):
         self.assertEqual(module.current(FL, datetime.date(2026, 2, 1)), "2026")
         self.assertEqual(module.current(NJ, datetime.date(2026, 11, 13)), "222")

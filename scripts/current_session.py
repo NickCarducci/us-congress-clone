@@ -3,9 +3,8 @@ States scraper's own metadata (legislative_sessions with start/end dates).
 
 Run inside the scraper image, from its working directory:
     python current_session.py nj
-Current = the primary session running today; else any session running today;
-else the latest regular session that has started. (os-update's own default is the last
-listed session, which can be next year's pre-filing session.)
+See current() for the rule. (os-update's own default is the last listed
+session, which can be next year's pre-filing session.)
 """
 import datetime
 import importlib
@@ -23,19 +22,24 @@ def sessions_for(abbr):
 
 
 def current(sessions, today):
+    """Sessions are listed oldest to newest, and newer ones often lack dates.
+    1. A special session running today (start and end both known).
+    2. Else the last-listed regular session that hasn't started in the future
+       (no start date counts as started). Skips next year's pre-filing session.
+    3. Else "" (os-update's own default)."""
     def day(value):
         return datetime.date.fromisoformat(value[:10]) if value else None
 
-    running = [s for s in sessions
-               if day(s.get("start_date")) and day(s["start_date"]) <= today
-               and (not day(s.get("end_date")) or today <= day(s["end_date"]))]
-    primary = [s for s in running if s.get("classification") == "primary"]
-    if primary or running:
-        return max(primary or running, key=lambda s: s["start_date"])["identifier"]
-    started = [s for s in sessions if day(s.get("start_date")) and day(s["start_date"]) <= today]
-    regular = [s for s in started if s.get("classification") == "primary"]
-    pool = regular or started
-    return max(pool, key=lambda s: s["start_date"])["identifier"] if pool else ""
+    def started(s):
+        return not day(s.get("start_date")) or day(s["start_date"]) <= today
+
+    specials = [s for s in sessions if s.get("classification") == "special"
+                and day(s.get("start_date")) and day(s.get("end_date"))
+                and day(s["start_date"]) <= today <= day(s["end_date"])]
+    if specials:
+        return specials[-1]["identifier"]
+    regular = [s for s in sessions if s.get("classification") != "special" and started(s)]
+    return regular[-1]["identifier"] if regular else ""
 
 
 if __name__ == "__main__":
