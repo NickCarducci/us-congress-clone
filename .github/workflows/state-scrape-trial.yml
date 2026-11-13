@@ -64,7 +64,9 @@ jobs:
           EXTRA: ${{ inputs.extra }}
         run: |
           if [[ "$EXTRA" == *session=* ]]; then echo "args=" >> "$GITHUB_OUTPUT"; exit 0; fi
-          session=$(docker run --rm -v "$PWD/clone/scripts:/picker:ro" --entrypoint python \
+          # Run from the scrapers' folder so "scrapers.<state>" imports.
+          session=$(docker run --rm -v "$PWD/clone/scripts:/picker:ro" -w /opt/openstates/openstates \
+            -e PYTHONPATH=/opt/openstates/openstates --entrypoint python \
             os-scrapers /picker/current_session.py "$STATE")
           echo "Current session: ${session:-(scraper default)}"
           [ -n "$session" ] && echo "args=session=$session" >> "$GITHUB_OUTPUT" || echo "args=" >> "$GITHUB_OUTPUT"
