@@ -18,6 +18,18 @@ PATCHES = [
      '''{"Senate": "upper", "House": "lower", None: "legislature"}[
                 (chamber_td.text or "").strip() or None
             ]'''),
+    # South Carolina occasionally serves a bill page without its summary block
+    # (S 304 crashed a 2-hour run with IndexError, then loaded fine on retry).
+    # Skip that one bill with a warning; the next run picks it up.
+    ("scrapers/sc/bills.py",
+     '''        bill_div = doc.xpath('//div[@style="margin:0 0 40px 0;"]')[0]
+''',
+     '''        bill_divs = doc.xpath('//div[@style="margin:0 0 40px 0;"]')
+        if not bill_divs:
+            self.warning("no bill summary at %s; skipped this run" % bill_detail_url)
+            return
+        bill_div = bill_divs[0]
+'''),
     # Connecticut's bulk CSVs now start with a UTF-8 byte-order mark, so the
     # first column read as "\ufeffcomm_code" (KeyError: 'comm_code').
     ("scrapers/ct/utils.py",

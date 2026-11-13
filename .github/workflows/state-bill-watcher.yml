@@ -1,0 +1,194 @@
+# Current-session bills for every state legislature, the way bill-watcher.yml
+# mirrors Congress: Open States' open-source scrapers (GPL-3.0) read each
+# legislature's own site here, the bill JSON is synced to the server, and the
+# app imports it into the state feed's store (state_legislative_bills). No
+# Open States account or API quota is spent on scraped states; the app's API
+# watcher keeps covering the rest (state-sources.json says which and why).
+#
+# No legislature publishes a change feed like GovInfo's BILLSTATUS RSS, so this
+# runs on a schedule: a full pass overnight (US time), and a second pass that
+# resumes any state cut off by the 6-hour job limit. Pages fetched today are
+# cached, so the second pass only fetches what the first didn't reach.
+name: State Bill Watcher
+
+on:
+  schedule:
+    - cron: "0 6 * * *"    # 1-2 AM Eastern: the full daily pass
+    - cron: "30 13 * * *"  # resumes states the first pass didn't finish
+  workflow_dispatch:
+    inputs:
+      states:
+        description: Comma-separated state codes (empty = every scraped state in state-sources.json)
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: state-bill-watcher
+  cancel-in-progress: false   # a long state must finish; the next pass queues
+
+env:
+  # openstates/openstates-scrapers (GPL-3.0), pinned for reproducibility.
+  SCRAPERS_SHA: 51fa072bacef2d80499945bc11f870fc5e5c4db8
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          STATES: ${{ inputs.states }}
+          # Only whether each key is set; the values never reach this job.
+          HAVE_SECRETS: >-
+            ${{ secrets.NEW_YORK_API_KEY != '' && 'NEW_YORK_API_KEY,' || '' }}${{ secrets.INDIANA_API_KEY != '' && 'INDIANA_API_KEY,' || '' }}${{ secrets.DC_API_KEY != '' && 'DC_API_KEY,' || '' }}
+        run: echo "matrix=$(python3 scripts/plan_states.py state-sources.json "$STATES")" >> "$GITHUB_OUTPUT"
+
+  scrape:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # GitHub-hosted runners' ceiling for one job
+    strategy:
+      fail-fast: false
+      # Leaves runners free for the Congress watchers (20 concurrent jobs per account).
+      max-parallel: 16
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    env:
+      STATE: ${{ matrix.state }}
+      CHAMBER: ${{ matrix.chamber }}
+      LABEL: ${{ matrix.state }}${{ matrix.chamber }}
+    steps:
+      - name: Check out this repository (session picker, patches)
+        uses: actions/checkout@v4
+        with:
+          path: clone
+
+      - name: Check out the Open States scrapers
+        uses: actions/checkout@v4
+        with:
+          repository: openstates/openstates-scrapers
+          ref: ${{ env.SCRAPERS_SHA }}
+          path: scrapers
+
+      - name: Patch scrapers for legislature-site changes
+        run: python3 clone/scripts/patch_state_scrapers.py scrapers
+
+      - name: Build the scraper image
+        run: |
+          # California loads the legislature's database export into MariaDB
+          # (bundled in Open States' California image) before scraping it.
+          if [ "$STATE" = ca ]; then
+            docker build -q -f scrapers/Dockerfile.california -t os-scrapers scrapers
+          else
+            docker build -q -t os-scrapers scrapers
+          fi
+
+      - name: Pick the current session
+        id: session
+        run: |
+          session=$(docker run --rm -v "$PWD/clone/scripts:/picker:ro" -w /opt/openstates/openstates \
+            -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers --entrypoint python \
+            os-scrapers /picker/current_session.py "$STATE")
+          echo "Current session: ${session:-(scraper default)}"
+          [ -n "$session" ] && echo "args=session=$session" >> "$GITHUB_OUTPUT" || echo "args=" >> "$GITHUB_OUTPUT"
+
+      - name: Today's page cache key
+        id: cache
+        run: echo "prefix=state-bills-cache-$LABEL-$(date -u +%Y%m%d)-" >> "$GITHUB_OUTPUT"
+
+      # Resume: a later pass the same day reuses the pages already fetched; a
+      # new day starts fresh so the scrape never serves yesterday's pages.
+      - name: Restore today's page cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
+          restore-keys: ${{ steps.cache.outputs.prefix }}
+
+      - name: Scrape bills (no database)
+        id: scrape
+        # Stops 20 minutes before the job does, so what it got is still synced.
+        timeout-minutes: 340
+        env:
+          SESSION: ${{ steps.session.outputs.args }}
+          RPM: ${{ matrix.rpm }}
+          NEW_YORK_API_KEY: ${{ secrets.NEW_YORK_API_KEY }}
+          INDIANA_API_KEY: ${{ secrets.INDIANA_API_KEY }}
+          DC_API_KEY: ${{ secrets.DC_API_KEY }}
+        run: |
+          mkdir -p out cache
+          chamber=${CHAMBER:+chamber=$CHAMBER}
+          keys="-e NEW_YORK_API_KEY -e INDIANA_API_KEY -e DC_API_KEY"
+          if [ "$STATE" = ca ]; then
+            # Starts MariaDB, downloads and loads CA's export, then runs os-update ca "$@".
+            docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
+              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $chamber --scrape --datadir /out \
+              2>&1 | tee scrape.log | tail -n 200
+          else
+            docker run --rm $keys -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
+              -w /opt/openstates/openstates -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers \
+              --entrypoint python \
+              os-scrapers /tools/resumable_update.py "$STATE" bills $SESSION $chamber \
+              --scrape --datadir /out --cachedir /cache --rpm "$RPM" --retries 5 --retry_wait 30 \
+              2>&1 | tee scrape.log | tail -n 200
+          fi
+          exit ${PIPESTATUS[0]}
+
+      # Its own step, so a scrape cut off by its timeout still reports (and syncs) what it got.
+      - name: Count bills
+        id: count
+        if: always()
+        run: |
+          bills=$(find out -name 'bill_*.json' 2>/dev/null | wc -l)
+          echo "bills=$bills" >> "$GITHUB_OUTPUT"
+          echo "### $STATE $CHAMBER: ${{ steps.scrape.outcome }}, $bills bills" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the page cache
+        if: always() && env.STATE != 'ca'
+        uses: actions/cache/save@v4
+        with:
+          path: cache
+          key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
+
+      # Bills from a run that failed or was cut off are still real bills: sync
+      # what was scraped (each row is upserted by state, session and number).
+      - name: Prepare the server folder
+        if: always() && steps.count.outputs.bills > 0
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          envs: LABEL
+          script: mkdir -p "/home/ubuntu/state-bills-data/$LABEL"
+
+      # --delete only clears this job's own folder of the previous run's files
+      # (the scraper names each file with a fresh UUID); stored rows stay.
+      - name: Sync bill data to server
+        if: always() && steps.count.outputs.bills > 0
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -az -4 --delete --include=bill_*.json --exclude=*
+          path: out/${{ matrix.state }}/
+          remote_path: /home/ubuntu/state-bills-data/${{ env.LABEL }}/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
+
+      - name: Import into the state feed
+        if: always() && steps.count.outputs.bills > 0
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          envs: LABEL
+          command_timeout: 30m
+          script: |
+            set -eu
+            cd /home/ubuntu/microservice   # its .env holds the store's connection
+            node Consumers/POP-U-LIST/scripts/import-openstates-bulk.cjs "/home/ubuntu/state-bills-data/$LABEL" --status=scraped

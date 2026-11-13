@@ -8,6 +8,7 @@ session, which can be next year's pre-filing session.)
 """
 import datetime
 import importlib
+import re
 import sys
 
 from openstates.scrape import State
@@ -19,6 +20,16 @@ def sessions_for(abbr):
         if isinstance(value, type) and issubclass(value, State) and value is not State:
             return value.legislative_sessions
     raise SystemExit(f"no State class in scrapers.{abbr}")
+
+
+def is_special(session):
+    """Upstream classification isn't reliable: Georgia's and Virginia's specials
+    have none, and Minnesota's and Mississippi's are marked "primary". Their
+    names always say it, though ("2026 Special Session", "1st Extraordinary")."""
+    if session.get("classification") == "special":
+        return True
+    name = f'{session.get("name", "")} {session.get("_scraped_name", "")}'
+    return bool(re.search(r"special|extraordinary", name, re.I))
 
 
 def current(sessions, today):
@@ -35,10 +46,10 @@ def current(sessions, today):
     def started(s):
         return not day(s.get("start_date")) or day(s["start_date"]) <= today
 
-    regular = [s for s in sessions if s.get("classification") != "special" and started(s)]
+    regular = [s for s in sessions if not is_special(s) and started(s)]
     if regular:
         return regular[-1]["identifier"]
-    specials = [s for s in sessions if s.get("classification") == "special"
+    specials = [s for s in sessions if is_special(s)
                 and day(s.get("start_date")) and day(s.get("end_date"))
                 and day(s["start_date"]) <= today <= day(s["end_date"])]
     return specials[-1]["identifier"] if specials else ""

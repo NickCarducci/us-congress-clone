@@ -7,9 +7,12 @@ patches = importlib.util.module_from_spec(spec); spec.loader.exec_module(patches
 class PatchStateScrapers(unittest.TestCase):
     def tree(self):
         root = pathlib.Path(tempfile.mkdtemp())
+        files = {}   # one file can carry several patches (South Carolina has two)
         for relative, old, _ in patches.PATCHES:
+            files[relative] = files.get(relative, "before\n") + old + "between\n"
+        for relative, text in files.items():
             (root / relative).parent.mkdir(parents=True, exist_ok=True)
-            (root / relative).write_text("before\n" + old + "after\n")
+            (root / relative).write_text(text + "after\n")
         return root
 
     def test_patches_apply_once(self):

@@ -29,6 +29,17 @@ minutes quota.
 - **`bill-text-watcher.yml`** — mirrors printed bill text separately so status
   refreshes do not interrupt a long text backfill. Its optional `congress` input
   supports historical backfills; daily runs follow the current Congress.
+- **`state-bill-watcher.yml`** — current-session bills for every state
+  legislature, from Open States' open-source scrapers (GPL-3.0) run against
+  each legislature's own site. Daily pass at 06:00 UTC plus a 13:30 UTC pass
+  that resumes anything cut off (pages fetched that day are cached). Bill JSON
+  is rsynced to the server and imported into the app's state feed.
+  `state-sources.json` sets each state's handling: split by chamber, request
+  rate, a state API key secret (`NEW_YORK_API_KEY`, `INDIANA_API_KEY`,
+  `DC_API_KEY`), or `api` for states whose sites refuse GitHub (IL, TX), which
+  the app's Open States API watcher covers instead.
+- **`state-scrape-trial.yml`** — one-off scrape of a single state (artifact
+  only, nothing synced), for testing a state's scraper.
 - **`rollcall-watcher.yml`** — clones roll-call vote data and sitting
   member profiles, and syncs them to the server. Runs on its own daily
   schedule (see the workflow file for why this one isn't event-triggered

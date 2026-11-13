@@ -48,6 +48,19 @@ class CurrentSession(unittest.TestCase):
         self.assertEqual(module.current(FL, datetime.date(2026, 2, 1)), "2026")
         self.assertEqual(module.current(NJ, datetime.date(2026, 11, 13)), "222")
 
+    def test_specials_named_but_not_classified_are_still_specials(self):
+        today = datetime.date(2026, 11, 13)
+        ga = [{"identifier": "2025_26", "name": "2025-2026 Regular Session", "start_date": "2025-01-13", "end_date": "2026-04-02"},
+              {"identifier": "2026_ss", "name": "2026 Special Session", "start_date": "2026-06-17", "end_date": "2026-12-13"}]
+        ms = [{"identifier": "2026", "classification": "primary", "name": "2026 Regular Session", "start_date": "2026-01-06"},
+              {"identifier": "20261E", "classification": "primary", "name": "2026 1st Extraordinary Session", "start_date": "2026-07-14"}]
+        mn = [{"identifier": "2025-2026", "classification": "primary", "name": "2025-2026 Regular Session", "start_date": "2025-01-14"},
+              {"identifier": "2025s1", "classification": "primary", "name": "2025, First Special Session", "start_date": "2025-06-08"},
+              {"identifier": "2027-2028", "classification": "primary", "name": "2027-2028 Regular Session", "start_date": "2027-01-12"}]
+        self.assertEqual(module.current(ga, today), "2025_26")
+        self.assertEqual(module.current(ms, today), "2026")
+        self.assertEqual(module.current(mn, today), "2025-2026")
+
 
 if __name__ == "__main__":
     unittest.main()

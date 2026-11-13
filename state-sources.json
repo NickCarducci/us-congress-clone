@@ -1,0 +1,21 @@
+{
+  "_about": "How state-bill-watcher.yml gets each state's current-session bills, set from the 2026-11-13 trial runs. source: scraper = Open States' open-source scraper run here; api = left to the app server's Open States API watcher (small free quota) until a scraper can run. split: scrape each chamber in its own job (states that took over ~2 h, or a rate-limited site). rpm: requests per minute to the legislature's site. secret: the repo secret the scraper needs (the state's own API key); without it the state falls back to the API watcher.",
+  "defaults": {"source": "scraper", "split": false, "rpm": 60},
+  "states": {
+    "ak": {}, "al": {}, "ar": {}, "az": {"split": true}, "ca": {},
+    "co": {"split": true}, "ct": {}, "de": {}, "fl": {}, "ga": {},
+    "hi": {}, "ia": {"split": true}, "id": {}, "ks": {"split": true}, "ky": {},
+    "la": {"split": true}, "ma": {"split": true}, "md": {}, "me": {"split": true}, "mi": {"split": true},
+    "mn": {}, "mo": {}, "ms": {}, "mt": {"split": true}, "nc": {},
+    "nd": {}, "ne": {}, "nh": {}, "nj": {}, "nm": {},
+    "nv": {"split": true}, "oh": {}, "ok": {"split": true}, "or": {}, "pa": {"split": true},
+    "ri": {}, "sc": {}, "sd": {}, "tn": {"split": true}, "ut": {"split": true},
+    "va": {}, "vt": {"split": true}, "wa": {"split": true}, "wi": {"split": true, "rpm": 6}, "wv": {},
+    "wy": {},
+    "ny": {"secret": "NEW_YORK_API_KEY", "_note": "Open Legislation API key (free): legislation.nysenate.gov"},
+    "in": {"secret": "INDIANA_API_KEY", "_note": "Indiana General Assembly API key: docs.api.iga.in.gov"},
+    "dc": {"secret": "DC_API_KEY", "_note": "DC Council LIMS API key"},
+    "il": {"source": "api", "_note": "ilga.gov answers 403 to GitHub and to a home connection alike"},
+    "tx": {"source": "api", "_note": "Texas Legislature's FTP resets GitHub's connections, even at 20 rpm"}
+  }
+}
