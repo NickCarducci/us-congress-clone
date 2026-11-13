@@ -13,7 +13,7 @@ on:
         default: nj
         required: true
       extra:
-        description: Extra os-update arguments (e.g. a session like "session=2026")
+        description: Extra os-update arguments (e.g. "session=2026"; otherwise the current session is picked)
         default: ""
         required: false
 
@@ -33,6 +33,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
+      - name: Check out this repository (session picker)
+        uses: actions/checkout@v4
+        with:
+          path: clone
+
       - name: Check out the Open States scrapers
         uses: actions/checkout@v4
         with:
@@ -41,19 +46,47 @@ jobs:
           path: scrapers
 
       - name: Build the scraper image
-        run: docker build -q -t os-scrapers scrapers
+        env:
+          STATE: ${{ inputs.state }}
+        run: |
+          # California loads the legislature's database export into MariaDB
+          # (bundled in Open States' California image) before scraping it.
+          if [ "$STATE" = ca ]; then
+            docker build -q -f scrapers/Dockerfile.california -t os-scrapers scrapers
+          else
+            docker build -q -t os-scrapers scrapers
+          fi
+
+      - name: Pick the current session
+        id: session
+        env:
+          STATE: ${{ inputs.state }}
+          EXTRA: ${{ inputs.extra }}
+        run: |
+          if [[ "$EXTRA" == *session=* ]]; then echo "args=" >> "$GITHUB_OUTPUT"; exit 0; fi
+          session=$(docker run --rm -v "$PWD/clone/scripts:/picker:ro" --entrypoint python \
+            os-scrapers /picker/current_session.py "$STATE")
+          echo "Current session: ${session:-(scraper default)}"
+          [ -n "$session" ] && echo "args=session=$session" >> "$GITHUB_OUTPUT" || echo "args=" >> "$GITHUB_OUTPUT"
 
       - name: Scrape bills (no database)
         id: scrape
         env:
           STATE: ${{ inputs.state }}
           EXTRA: ${{ inputs.extra }}
+          SESSION: ${{ steps.session.outputs.args }}
         run: |
           mkdir -p out
           start=$(date +%s)
           set +e
-          docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint os-update \
-            os-scrapers "$STATE" bills $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+          if [ "$STATE" = ca ]; then
+            # Starts MariaDB, downloads and loads CA's export, then runs os-update ca "$@".
+            docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
+              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+          else
+            docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint os-update \
+              os-scrapers "$STATE" bills $SESSION $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+          fi
           status=${PIPESTATUS[0]}
           set -e
           elapsed=$(( $(date +%s) - start ))
