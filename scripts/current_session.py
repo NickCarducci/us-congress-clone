@@ -23,23 +23,25 @@ def sessions_for(abbr):
 
 def current(sessions, today):
     """Sessions are listed oldest to newest, and newer ones often lack dates.
-    1. A special session running today (start and end both known).
-    2. Else the last-listed regular session that hasn't started in the future
-       (no start date counts as started). Skips next year's pre-filing session.
-    3. Else "" (os-update's own default)."""
+    1. The last-listed regular session that hasn't started in the future
+       (no start date counts as started); this skips next year's pre-filing.
+    2. Else a special session running today (start and end both known).
+    3. Else "" (os-update's own default).
+    Regular sessions come first: a running special one can be empty (Virginia's
+    2026S1 returned no bills) while the regular session holds the feed."""
     def day(value):
         return datetime.date.fromisoformat(value[:10]) if value else None
 
     def started(s):
         return not day(s.get("start_date")) or day(s["start_date"]) <= today
 
+    regular = [s for s in sessions if s.get("classification") != "special" and started(s)]
+    if regular:
+        return regular[-1]["identifier"]
     specials = [s for s in sessions if s.get("classification") == "special"
                 and day(s.get("start_date")) and day(s.get("end_date"))
                 and day(s["start_date"]) <= today <= day(s["end_date"])]
-    if specials:
-        return specials[-1]["identifier"]
-    regular = [s for s in sessions if s.get("classification") != "special" and started(s)]
-    return regular[-1]["identifier"] if regular else ""
+    return specials[-1]["identifier"] if specials else ""
 
 
 if __name__ == "__main__":

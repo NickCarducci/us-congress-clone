@@ -25,8 +25,13 @@ class CurrentSession(unittest.TestCase):
     def test_between_sessions_takes_the_latest_regular_one_not_next_years_prefiling(self):
         self.assertEqual(module.current(FL, datetime.date(2026, 11, 13)), "2026")
 
-    def test_a_running_special_session_is_current(self):
-        self.assertEqual(module.current(FL, datetime.date(2026, 4, 22)), "2026A")
+    def test_the_regular_session_wins_over_a_running_special_one(self):
+        self.assertEqual(module.current(FL, datetime.date(2026, 4, 22)), "2026")
+
+    def test_a_special_session_only_without_a_regular_one(self):
+        only_special = [{"identifier": "2026S1", "classification": "special",
+                         "start_date": "2026-11-01", "end_date": "2026-11-30"}]
+        self.assertEqual(module.current(only_special, datetime.date(2026, 11, 13)), "2026S1")
 
     def test_undated_newer_sessions_still_count_as_the_latest(self):
         tx = [{"identifier": "86", "classification": "primary", "start_date": "2019-01-08", "end_date": "2019-05-27"},

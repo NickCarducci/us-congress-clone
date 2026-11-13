@@ -1,0 +1,49 @@
+"""Small fixes to Open States' scrapers for changes on the legislatures' own
+sites, applied before the image is built (like patch_scraper.py for the
+congress scraper). Each patch skips with a warning once upstream has changed
+the code it targets, so a fixed upstream never breaks the build.
+
+    python3 patch_state_scrapers.py <openstates-scrapers checkout>
+"""
+import pathlib
+import sys
+
+PATCHES = [
+    # South Carolina now pads the chamber cell (" Senate "); the lookup expected
+    # the bare name, so every bill with an action failed (KeyError: ' Senate ').
+    ("scrapers/sc/bills.py",
+     '''{"Senate": "upper", "House": "lower", None: "legislature"}[
+                chamber_td.text
+            ]''',
+     '''{"Senate": "upper", "House": "lower", None: "legislature"}[
+                (chamber_td.text or "").strip() or None
+            ]'''),
+    # Maryland's site lists a 2027 regular and a 2026 special session the
+    # scraper's metadata doesn't have yet; os-update refuses to run until every
+    # listed session is known. Ignore them until upstream adds them.
+    ("scrapers/md/__init__.py",
+     '''    ignored_scraped_sessions = [
+''',
+     '''    ignored_scraped_sessions = [
+        "2027 Regular Session",  # patched in by us-congress-clone until upstream adds it
+        "2026 Special Session",  # patched in by us-congress-clone until upstream adds it
+'''),
+]
+
+
+def main(root):
+    root = pathlib.Path(root)
+    for relative, old, new in PATCHES:
+        path = root / relative
+        text = path.read_text()          # a missing file is a real error
+        if new in text:
+            print(f"{relative}: already patched")
+        elif old in text:
+            path.write_text(text.replace(old, new, 1))
+            print(f"{relative}: patched")
+        else:
+            print(f"::warning::{relative}: code changed upstream; patch skipped")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1] if len(sys.argv) > 1 else ".")

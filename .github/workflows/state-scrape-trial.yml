@@ -45,6 +45,9 @@ jobs:
           ref: ${{ env.SCRAPERS_SHA }}
           path: scrapers
 
+      - name: Patch scrapers for legislature-site changes
+        run: python3 clone/scripts/patch_state_scrapers.py scrapers
+
       - name: Build the scraper image
         env:
           STATE: ${{ inputs.state }}
