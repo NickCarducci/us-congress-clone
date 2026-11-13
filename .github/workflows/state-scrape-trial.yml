@@ -78,6 +78,19 @@ jobs:
           echo "Current session: ${session:-(scraper default)}"
           [ -n "$session" ] && echo "args=session=$session" >> "$GITHUB_OUTPUT" || echo "args=" >> "$GITHUB_OUTPUT"
 
+      - name: Today's page cache key
+        id: cache
+        run: echo "prefix=scrape-cache-${{ inputs.state }}${{ inputs.chamber }}-$(date -u +%Y%m%d)-" >> "$GITHUB_OUTPUT"
+
+      # Resume: a rerun the same day reuses the pages already fetched; a new
+      # day starts fresh so the scrape never serves yesterday's pages.
+      - name: Restore today's page cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
+          restore-keys: ${{ steps.cache.outputs.prefix }}
+
       - name: Scrape bills (no database)
         id: scrape
         # Stops 15 minutes before the job does, so the output is still packed and kept.
@@ -88,7 +101,7 @@ jobs:
           SESSION: ${{ steps.session.outputs.args }}
           CHAMBER: ${{ inputs.chamber && format('chamber={0}', inputs.chamber) || '' }}
         run: |
-          mkdir -p out
+          mkdir -p out cache
           start=$(date +%s)
           set +e
           if [ "$STATE" = ca ]; then
@@ -96,8 +109,11 @@ jobs:
             docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
               os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $CHAMBER $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
           else
-            docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint os-update \
-              os-scrapers "$STATE" bills $SESSION $CHAMBER $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+            docker run --rm -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
+              -w /opt/openstates/openstates -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers \
+              --entrypoint python \
+              os-scrapers /tools/resumable_update.py "$STATE" bills $SESSION $CHAMBER $EXTRA \
+              --scrape --datadir /out --cachedir /cache 2>&1 | tee scrape.log | tail -n 200
           fi
           status=${PIPESTATUS[0]}
           set -e
@@ -112,6 +128,13 @@ jobs:
             echo "- output size: $(du -sh out | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
           exit $status
+
+      - name: Save the page cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cache
+          key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
 
       - name: Pack the output
         if: always()
