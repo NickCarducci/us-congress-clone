@@ -1,0 +1,79 @@
+# Trial: run Open States' own open-source scraper for one state, the way
+# bill-watcher.yml runs the unitedstates/congress scraper, to measure how long
+# a state takes and what it produces. No Open States account or API key; the
+# scraper reads the legislature's site directly. Output (one JSON per bill) is
+# kept as an artifact for the mirror's mapping.
+name: State Scrape Trial
+
+on:
+  workflow_dispatch:
+    inputs:
+      state:
+        description: Two-letter state code (lowercase), e.g. nj
+        default: nj
+        required: true
+      extra:
+        description: Extra os-update arguments (e.g. a session like "session=2026")
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: state-scrape-${{ inputs.state }}
+  cancel-in-progress: false
+
+env:
+  # openstates/openstates-scrapers (GPL-3.0), pinned for reproducibility.
+  SCRAPERS_SHA: 51fa072bacef2d80499945bc11f870fc5e5c4db8
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Check out the Open States scrapers
+        uses: actions/checkout@v4
+        with:
+          repository: openstates/openstates-scrapers
+          ref: ${{ env.SCRAPERS_SHA }}
+          path: scrapers
+
+      - name: Build the scraper image
+        run: docker build -q -t os-scrapers scrapers
+
+      - name: Scrape bills (no database)
+        id: scrape
+        env:
+          STATE: ${{ inputs.state }}
+          EXTRA: ${{ inputs.extra }}
+        run: |
+          mkdir -p out
+          start=$(date +%s)
+          set +e
+          docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint os-update \
+            os-scrapers "$STATE" bills $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+          status=${PIPESTATUS[0]}
+          set -e
+          elapsed=$(( $(date +%s) - start ))
+          bills=$(find out -name 'bill_*.json' | wc -l)
+          echo "elapsed=$elapsed" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $STATE bill scrape"
+            echo "- exit status: $status"
+            echo "- elapsed: $((elapsed / 60)) min $((elapsed % 60)) s"
+            echo "- bill files: $bills"
+            echo "- output size: $(du -sh out | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Keep the output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-${{ inputs.state }}
+          path: |
+            out
+            scrape.log
+          retention-days: 7
