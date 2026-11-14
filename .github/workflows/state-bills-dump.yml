@@ -1,0 +1,160 @@
+# The base layer for state bills: Open States' monthly PostgreSQL dump (public
+# domain, no account or key: data.openstates.org/postgres/monthly/), which
+# holds every state's sessions as of the 1st of the month. Only the bill
+# tables are restored, each state's sessions are exported as JSON, synced to
+# the server and imported into the state feed's store.
+#
+# The import never puts an older bill over a newer one, so this monthly
+# snapshot fills history and every state's current session without undoing
+# state-bill-watcher.yml's daily scrape. For states we can't scrape (IL and TX
+# refuse GitHub; NY, IN and DC need keys) it is the main source, with the
+# app's Open States API watcher filling in between dumps.
+name: State Bills Dump
+
+on:
+  schedule:
+    - cron: "0 9 3 * *"   # the 3rd: Open States publishes on the 1st
+  workflow_dispatch:
+    inputs:
+      month:
+        description: Dump month, YYYY-MM (empty = this month's)
+        default: ""
+        required: false
+      first_year:
+        description: Skip sessions that started before this year (empty = every session)
+        default: ""
+        required: false
+      states:
+        description: Comma-separated state codes (empty = all 50 and DC)
+        default: ""
+        required: false
+      import:
+        description: Sync and import into the app (off = export and report sizes only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: state-bills-dump
+  cancel-in-progress: false
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      MONTH: ${{ inputs.month }}
+      FIRST_YEAR: ${{ inputs.first_year }}
+      STATES: ${{ inputs.states }}
+      # A scheduled run imports; a manual one only when asked.
+      IMPORT: ${{ github.event_name == 'schedule' || inputs.import }}
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: openstates
+    steps:
+      - uses: actions/checkout@v4
+
+      # The dump is ~11 GB and the restored bill tables need room too.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Download this month's dump
+        run: |
+          month=${MONTH:-$(date -u +%Y-%m)}
+          echo "MONTH=$month" >> "$GITHUB_ENV"
+          curl -sSfL --retry 5 -o dump.pgdump "https://data.openstates.org/postgres/monthly/$month-public.pgdump"
+          ls -lh dump.pgdump
+
+      - name: Start Postgres
+        run: |
+          # A throwaway database: durability settings off for a fast load.
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=openstates \
+            -v "$PWD:/d" postgres:16 -c fsync=off -c synchronous_commit=off -c full_page_writes=off \
+            -c maintenance_work_mem=1GB -c max_wal_size=8GB
+          for i in $(seq 60); do docker exec pg pg_isready -U postgres -d openstates && break; sleep 2; done
+
+      # The dump is data-only, so the tables are created first. Every column is
+      # text: the export only reads them, and COPY's text form loads as-is.
+      - name: Restore the bill tables
+        run: |
+          docker exec -i pg psql -v ON_ERROR_STOP=1 -U postgres -d openstates <<'SQL'
+          CREATE TABLE opencivicdata_jurisdiction (created_at text, updated_at text, extras text, id text, name text, url text, classification text, division_id text, latest_bill_update text, latest_people_update text);
+          CREATE TABLE opencivicdata_legislativesession (id text, identifier text, name text, classification text, start_date text, end_date text, jurisdiction_id text, active text);
+          CREATE TABLE opencivicdata_organization (created_at text, updated_at text, extras text, id text, name text, classification text, jurisdiction_id text, parent_id text, links text, sources text, other_names text);
+          CREATE TABLE opencivicdata_bill (created_at text, updated_at text, extras text, id text, identifier text, title text, classification text, subject text, from_organization_id text, legislative_session_id text, first_action_date text, latest_action_date text, latest_action_description text, latest_passage_date text, citations text);
+          CREATE TABLE opencivicdata_billabstract (id text, abstract text, note text, bill_id text);
+          CREATE TABLE opencivicdata_billaction (id text, description text, date text, classification text, "order" text, bill_id text, organization_id text);
+          CREATE TABLE opencivicdata_billsponsorship (id text, name text, entity_type text, "primary" text, classification text, bill_id text, organization_id text, person_id text);
+          CREATE TABLE opencivicdata_billsource (id text, note text, url text, bill_id text);
+          SQL
+          docker exec pg pg_restore --data-only --no-owner -U postgres -d openstates -j 4 \
+            -t opencivicdata_jurisdiction -t opencivicdata_legislativesession -t opencivicdata_organization \
+            -t opencivicdata_bill -t opencivicdata_billabstract -t opencivicdata_billaction \
+            -t opencivicdata_billsponsorship -t opencivicdata_billsource /d/dump.pgdump
+          rm dump.pgdump
+          docker exec -i pg psql -v ON_ERROR_STOP=1 -U postgres -d openstates <<'SQL'
+          CREATE INDEX ON opencivicdata_bill (legislative_session_id);
+          CREATE INDEX ON opencivicdata_bill (id);
+          CREATE INDEX ON opencivicdata_organization (id);
+          CREATE INDEX ON opencivicdata_billaction (bill_id);
+          CREATE INDEX ON opencivicdata_billsponsorship (bill_id);
+          CREATE INDEX ON opencivicdata_billabstract (bill_id);
+          CREATE INDEX ON opencivicdata_billsource (bill_id);
+          ANALYZE;
+          SQL
+          df -h /
+
+      - name: Export each state's sessions
+        run: |
+          pip install -q psycopg2-binary
+          python3 scripts/export_dump_sessions.py export ${FIRST_YEAR:+--first-year $FIRST_YEAR} ${STATES:+--states $STATES} \
+            | tee sessions.tsv
+          {
+            echo "### Open States dump $MONTH"
+            echo "| state | sessions | bills | gzip MB |"
+            echo "|---|---|---|---|"
+            awk -F'\t' '$1 != "TOTAL" {s[$1]++; b[$1]+=$3; z[$1]+=$4}
+              END {for (k in s) printf "| %s | %d | %d | %.1f |\n", k, s[k], b[k], z[k]/1048576}' sessions.tsv | sort
+            tail -1 sessions.tsv | awk -F'\t' '{printf "\n**Total:** %s, %s bills, %.0f MB gzipped\n", $2, $3, $4/1048576}'
+          } >> "$GITHUB_STEP_SUMMARY"
+          du -sh export
+
+      - name: Prepare the server folder
+        if: env.IMPORT == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          script: mkdir -p /home/ubuntu/state-bills-data/dump && df -h /home/ubuntu
+
+      - name: Sync the export to the server
+        if: env.IMPORT == 'true'
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -a -4 --delete
+          path: export/
+          remote_path: /home/ubuntu/state-bills-data/dump/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
+
+      - name: Import into the state feed
+        if: env.IMPORT == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          command_timeout: 300m
+          script: |
+            set -eu
+            cd /home/ubuntu/microservice
+            for dir in /home/ubuntu/state-bills-data/dump/*/; do
+              node Consumers/POP-U-LIST/scripts/import-openstates-bulk.cjs "$dir" --status=bulk --env-from-pm2
+            done
