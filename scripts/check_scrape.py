@@ -1,8 +1,8 @@
 """Checks a scrape's output so far: is what was loaded proper bill data?
 
-    python3 check_scrape.py <dir of bill_*.json> [--session 2026] [--max-invalid 0.02]
+    python3 check_scrape.py <dir of bill_*.json> [--session 2026] [--sample 50] [--max-invalid 0.02]
 
-Each bill_*.json must parse and have a bill number, a title, the session being
+Reads the newest --sample files (all with 0). Each bill_*.json must parse and have a bill number, a title, the session being
 scraped (when given) and a list of actions. Prints one JSON line
 {"bills", "invalid", "examples", "proper"} and exits 0 when proper, 1 when more
 than --max-invalid of the bills (and at least 3) aren't. No bills yet is proper
@@ -31,11 +31,12 @@ def problem(bill, session):
     return None
 
 
-def check(directory, session=None, max_invalid=0.02, now=None):
+def check(directory, session=None, max_invalid=0.02, now=None, sample=0):
     now = now or time.time()
     bills = invalid = 0
     examples = []
-    for path in sorted(glob.glob(os.path.join(directory, "bill_*.json"))):
+    paths = sorted(glob.glob(os.path.join(directory, "bill_*.json")), key=os.path.getmtime, reverse=True)
+    for path in paths[:sample] if sample else paths:
         try:
             with open(path, encoding="utf-8") as handle:
                 bill = json.load(handle)
@@ -58,7 +59,8 @@ if __name__ == "__main__":
     parser.add_argument("directory")
     parser.add_argument("--session", default="")
     parser.add_argument("--max-invalid", type=float, default=0.02)
+    parser.add_argument("--sample", type=int, default=0)
     args = parser.parse_args()
-    result = check(args.directory, args.session or None, args.max_invalid)
+    result = check(args.directory, args.session or None, args.max_invalid, sample=args.sample)
     print(json.dumps(result))
     sys.exit(0 if result["proper"] else 1)

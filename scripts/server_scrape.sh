@@ -10,8 +10,7 @@
 # image (openstates/scrapers), this repository's resumable_update.py, and
 # checkpointed_scrape.sh syncing to the local state-bills-data. The page cache
 # persists here: an unfinished run's next pass resumes from it; a finished one's
-# next pass starts fresh. Health and errors land in scrape/<state>/.health.json,
-# which the watcher's plan job turns into GitHub issues.
+# next pass starts fresh. Output and errors go to the cron log.
 set -euo pipefail
 state=$1 rpm=${2:-60}
 here="$(cd "$(dirname "$0")" && pwd)"

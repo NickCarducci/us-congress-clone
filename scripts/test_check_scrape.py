@@ -42,6 +42,16 @@ class CheckScrape(unittest.TestCase):
                 os.utime(old, (0, 0))
             self.assertFalse(module.check(d)["proper"])
 
+    def test_a_sample_reads_only_the_newest(self):
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(5):
+                old = write(d, f"bill_old{i}.json", {**GOOD, "legislative_session": "2025"})
+                os.utime(old, (1, 1))
+            for i in range(3):
+                write(d, f"bill_{i}.json", GOOD)
+            self.assertEqual(module.check(d, "2026", sample=3)["bills"], 3)
+            self.assertTrue(module.check(d, "2026", sample=3)["proper"])
+
     def test_a_file_being_written_is_skipped_and_none_yet_is_proper(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(module.check(d)["bills"], 0)

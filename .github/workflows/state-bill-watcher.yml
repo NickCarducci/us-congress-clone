@@ -26,7 +26,6 @@ on:
 
 permissions:
   contents: read
-  issues: write   # a failed scrape check opens an issue
 
 concurrency:
   # Scheduled passes queue behind each other; a run for named states (by hand)
@@ -60,42 +59,8 @@ jobs:
           ssh -i ~/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "ubuntu@$HOST" \
             'cd /home/ubuntu/state-bills-data/scrape 2>/dev/null && for f in */.scraped_at; do [ -f "$f" ] && echo "${f%/.scraped_at} $(cat "$f")"; done; true' \
             > scraped_at.txt || : > scraped_at.txt
-          # Each scrape's last checkpoint (scripts/checkpointed_scrape.sh), here and on the server.
-          ssh -i ~/scytale.key -o ConnectTimeout=20 "ubuntu@$HOST" \
-            'cd /home/ubuntu/state-bills-data/scrape 2>/dev/null && for f in */.health.json; do [ -f "$f" ] && cat "$f"; done; true' \
-            > health.jsonl || : > health.jsonl
           rm -f ~/scytale.key
           echo "$(wc -l < scraped_at.txt) scrape times read"
-      # One open issue per state whose last scrape failed its check or crashed;
-      # closed again by hand once fixed. Cut-off scrapes aren't failures.
-      - name: Open issues for failed scrapes
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY' > failed.tsv
-          import json
-          for line in open("health.jsonl"):
-              line = line.strip()
-              if not line:
-                  continue
-              try:
-                  h = json.loads(line)
-              except ValueError:
-                  continue
-              if h.get("phase") == "failed":
-                  detail = "; ".join(h.get("examples") or [])
-                  print("\t".join([h.get("label", "?"), h.get("at", ""), h.get("message", ""),
-                                   f'{h.get("bills", 0)} bills, {h.get("invalid", 0)} improper', detail]))
-          PY
-          while IFS=$'\t' read -r label at message counts detail; do
-            title="State scrape failed: $label"
-            if [ -z "$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number -q '.[0].number')" ]; then
-              gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
-                --body "$message ($at): $counts. ${detail:-}"$'\n\n'"From the scrape's last checkpoint (scrape/$label/.health.json on the server)." \
-                && echo "opened: $title"
-            fi
-          done < failed.tsv
-
       - id: plan
         env:
           STATES: ${{ inputs.states }}
@@ -183,12 +148,11 @@ jobs:
           KEY: ${{ secrets.SCYTALE_SSH_KEY }}
         run: install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
 
-      # Checkpoints (scripts/checkpointed_scrape.sh): at 20 minutes and then
-      # hourly, what's scraped so far is checked; proper bills are synced to the
-      # server as they come, improper ones stop the scrape and fail the job (the
-      # plan job opens an issue). At 5h30m the scrape stops itself and syncs, so
-      # the job's 6-hour limit never loses work. --nonstrict: a bill failing Open
-      # States' schema (a new action type) is written and logged, not fatal.
+      # scripts/checkpointed_scrape.sh: at 20 minutes a sample of the newest
+      # bills must be proper bill data, or the scrape stops and the job fails.
+      # At 5h30m the scrape stops itself and syncs what it has, so the job's
+      # 6-hour limit never loses work. --nonstrict: a bill failing Open States'
+      # schema (a new action type) is written and logged, not fatal.
       - name: Scrape bills (no database)
         id: scrape
         timeout-minutes: 350
