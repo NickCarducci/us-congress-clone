@@ -31,8 +31,12 @@ minutes quota.
   supports historical backfills; daily runs follow the current Congress.
 - **`state-bill-watcher.yml`** — current-session bills for every state
   legislature, from Open States' open-source scrapers (GPL-3.0) run against
-  each legislature's own site. Daily pass at 06:00 UTC plus a 13:30 UTC pass
-  that resumes anything cut off (pages fetched that day are cached). Only a
+  each legislature's own site, only when something changed: before each pass
+  one Open States API request per state (`updated_since` its last finished
+  scrape; repo secret `OPEN_STATES_KEY`) decides, and unchanged states are
+  skipped. Without the secret every state is scraped. Passes at 06:00 UTC and
+  13:30 UTC, the second resuming anything cut off (pages fetched that day are
+  cached). Only a
   scrape that finished is synced: its bill JSON is rsynced to the server (`state-bills-data/scrape/`) and that state's
   catalog is rebuilt from files, the same way as Congress (no database).
   `state-sources.json` sets each state's handling: split by chamber, request

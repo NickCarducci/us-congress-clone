@@ -5,10 +5,12 @@
 # Open States account or API quota is spent on scraped states; the app's API
 # watcher keeps covering the rest (state-sources.json says which and why).
 #
-# No legislature publishes a change feed like GovInfo's BILLSTATUS RSS, so this
-# runs on a schedule: a full pass overnight (US time), and a second pass that
-# resumes any state cut off by the 6-hour job limit. Pages fetched today are
-# cached, so the second pass only fetches what the first didn't reach.
+# Most legislatures publish no change feed like GovInfo's BILLSTATUS RSS, so
+# Open States' API stands in for one: before each pass, one updated_since
+# request per state (OPEN_STATES_KEY) asks whether anything changed since that
+# state's last finished scrape, and only states that changed are scraped.
+# Passes: overnight (US time), and one that resumes any state cut off by the
+# 6-hour job limit (pages fetched today are cached).
 name: State Bill Watcher
 
 on:
@@ -42,18 +44,36 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      any: ${{ steps.plan.outputs.any }}
     steps:
       - uses: actions/checkout@v4
+      # Each job's last finished scrape, stamped on the server by the last step below.
+      - name: When each state was last scraped
+        env:
+          KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+          HOST: ${{ secrets.SCYTALE_HOST }}
+        run: |
+          install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
+          ssh -i ~/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "ubuntu@$HOST" \
+            'cd /home/ubuntu/state-bills-data/scrape 2>/dev/null && for f in */.scraped_at; do [ -f "$f" ] && echo "${f%/.scraped_at} $(cat "$f")"; done; true' \
+            > scraped_at.txt || : > scraped_at.txt
+          rm -f ~/scytale.key
+          echo "$(wc -l < scraped_at.txt) scrape times read"
       - id: plan
         env:
           STATES: ${{ inputs.states }}
+          OPEN_STATES_KEY: ${{ secrets.OPEN_STATES_KEY }}
           # Only whether each key is set; the values never reach this job.
           HAVE_SECRETS: >-
             ${{ secrets.NEW_YORK_API_KEY != '' && 'NEW_YORK_API_KEY,' || '' }}${{ secrets.INDIANA_API_KEY != '' && 'INDIANA_API_KEY,' || '' }}${{ secrets.DC_API_KEY != '' && 'DC_API_KEY,' || '' }}
-        run: echo "matrix=$(python3 scripts/plan_states.py state-sources.json "$STATES")" >> "$GITHUB_OUTPUT"
+        run: |
+          matrix=$(python3 scripts/plan_states.py state-sources.json "$STATES" scraped_at.txt)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "any=$(jq '.include | length > 0' <<< "$matrix")" >> "$GITHUB_OUTPUT"
 
   scrape:
     needs: plan
+    if: needs.plan.outputs.any == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360   # GitHub-hosted runners' ceiling for one job
     strategy:
@@ -194,6 +214,8 @@ jobs:
           host: ${{ secrets.SCYTALE_HOST }}
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
-          envs: STATE
           command_timeout: 30m
-          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data "$STATE"
+          envs: STATE,LABEL
+          script: |
+            node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data "$STATE"
+            date -u +%Y-%m-%dT%H:%M:%SZ > "/home/ubuntu/state-bills-data/scrape/$LABEL/.scraped_at"
