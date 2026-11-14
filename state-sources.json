@@ -5,7 +5,7 @@
     "ak": {}, "al": {}, "ar": {}, "az": {"split": true}, "ca": {},
     "co": {"split": true}, "ct": {}, "de": {}, "fl": {}, "ga": {},
     "hi": {}, "ia": {"split": true}, "id": {}, "ks": {"_note": "its scraper has no chamber argument: one job"}, "ky": {},
-    "la": {"split": true}, "ma": {"split": true}, "md": {}, "me": {"split": true}, "mi": {"_note": "its scraper has no chamber argument: one job"},
+    "la": {"split": true}, "ma": {"split": true, "rpm": 20, "_note": "malegislature.gov throttles fast automated requests (connection timeouts at 60 rpm)"}, "md": {}, "me": {"split": true}, "mi": {"_note": "its scraper has no chamber argument: one job"},
     "mn": {}, "mo": {}, "ms": {}, "mt": {"_note": "its scraper has no chamber argument: one job"}, "nc": {},
     "nd": {}, "ne": {}, "nh": {}, "nj": {}, "nm": {},
     "nv": {"_note": "its scraper has no chamber argument: one job"}, "oh": {}, "ok": {"split": true}, "or": {}, "pa": {"split": true},
