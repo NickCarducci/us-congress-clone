@@ -39,7 +39,8 @@ def plan(config, only=(), have_secrets=()):
             skipped.append(f"{state}: needs {secret}")
             continue
         for chamber in (["upper", "lower"] if settings["split"] else [""]):
-            jobs.append({"state": state, "chamber": chamber, "rpm": settings["rpm"], "secret": secret or ""})
+            jobs.append({"state": state, "chamber": chamber, "rpm": settings["rpm"], "secret": secret or "",
+                         "scraper": settings.get("scraper", "bills")})
     return jobs, skipped
 
 

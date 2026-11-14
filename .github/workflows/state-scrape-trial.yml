@@ -16,6 +16,10 @@ on:
         description: Batch a slow state by chamber (upper or lower); empty scrapes both
         default: ""
         required: false
+      scraper:
+        description: The state's bill scraper (bills; VA uses csv_bills)
+        default: bills
+        required: false
       extra:
         description: Extra os-update arguments (e.g. "session=2026"; otherwise the current session is picked)
         default: ""
@@ -118,7 +122,7 @@ jobs:
             docker run --rm -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
               -w /opt/openstates/openstates -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers \
               --entrypoint python \
-              os-scrapers /tools/resumable_update.py "$STATE" bills $SESSION $CHAMBER $EXTRA \
+              os-scrapers /tools/resumable_update.py "$STATE" "${{ inputs.scraper || 'bills' }}" $SESSION $CHAMBER $EXTRA \
               --scrape --datadir /out --cachedir /cache 2>&1 | tee scrape.log | tail -n 200
           fi
           status=${PIPESTATUS[0]}

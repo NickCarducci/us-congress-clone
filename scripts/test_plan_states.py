@@ -18,7 +18,11 @@ class PlanStates(unittest.TestCase):
 
     def test_a_key_once_set_brings_the_state_in(self):
         jobs, _ = module.plan(CONFIG, only={"ny"}, have_secrets={"NEW_YORK_API_KEY"})
-        self.assertEqual(jobs, [{"state": "ny", "chamber": "", "rpm": 60, "secret": "NEW_YORK_API_KEY"}])
+        self.assertEqual(jobs, [{"state": "ny", "chamber": "", "rpm": 60, "secret": "NEW_YORK_API_KEY", "scraper": "bills"}])
+
+    def test_a_state_can_name_its_scraper(self):
+        jobs, _ = module.plan(CONFIG, only={"va"})
+        self.assertEqual(jobs[0]["scraper"], "csv_bills")
 
     def test_every_state_is_configured(self):
         self.assertEqual(len(CONFIG["states"]), 51)   # 50 states and DC

@@ -1,7 +1,9 @@
 """os-update, resumable: pages fetched by an earlier run (kept in --cachedir)
 are served from the cache, while new requests keep the scraper's throttle.
 Also tolerates a legislature listing a session the scraper doesn't know yet
-(see _check_session_list_tolerant).
+(see _check_session_list_tolerant), fetches stateful pages fresh
+(_request_fresh_when_stateful), and accepts action types Open States uses
+before releasing them (below).
 
 Open States reads its page cache only in --fastmode, which also turns off
 throttling. scrapelib checks the cache before throttling, so allowing cache
@@ -23,6 +25,39 @@ def _resumable_init(self, *args, **kwargs):
 
 
 base.Scraper.__init__ = _resumable_init
+
+_request = base.Scraper.request
+
+
+def _request_fresh_when_stateful(self, method, url, *args, **kwargs):
+    """The cache is keyed by address alone. A request that carries cookies, or
+    repeats an address already fetched in this run, can get a different page
+    than the cached one (Arizona sets its session by cookie, then serves the
+    same /bills/ address with that session selected): fetch those fresh."""
+    seen = self.__dict__.setdefault("_fetched_this_run", set())
+    key = (str(method).upper(), str(url))
+    stateful = bool(kwargs.get("cookies")) or key in seen
+    seen.add(key)
+    if not stateful or self.cache_write_only:
+        return _request(self, method, url, *args, **kwargs)
+    self.cache_write_only = True
+    try:
+        return _request(self, method, url, *args, **kwargs)
+    finally:
+        self.cache_write_only = False
+
+
+base.Scraper.request = _request_fresh_when_stateful
+
+# Bill action types the scrapers already use but Open States hasn't released in
+# openstates-core yet (non-concurrence: in its repository since 2026-10-22,
+# used by Massachusetts). The schema validates against this same list; once a
+# release includes a type, nothing is added.
+from openstates.data import common  # noqa: E402
+
+for _classification in ("non-concurrence",):
+    if _classification not in common.BILL_ACTION_CLASSIFICATIONS:
+        common.BILL_ACTION_CLASSIFICATIONS.append(_classification)
 
 import openstates.cli.update as update  # noqa: E402  (after the patch)
 from openstates.exceptions import CommandError  # noqa: E402

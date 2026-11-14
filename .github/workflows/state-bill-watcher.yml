@@ -142,6 +142,8 @@ jobs:
         env:
           SESSION: ${{ steps.session.outputs.args }}
           RPM: ${{ matrix.rpm }}
+          # Usually "bills"; state-sources.json names another (VA: csv_bills).
+          SCRAPER: ${{ matrix.scraper || 'bills' }}
           NEW_YORK_API_KEY: ${{ secrets.NEW_YORK_API_KEY }}
           INDIANA_API_KEY: ${{ secrets.INDIANA_API_KEY }}
           DC_API_KEY: ${{ secrets.DC_API_KEY }}
@@ -158,7 +160,7 @@ jobs:
             docker run --rm $keys -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
               -w /opt/openstates/openstates -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers \
               --entrypoint python \
-              os-scrapers /tools/resumable_update.py "$STATE" bills $SESSION $chamber \
+              os-scrapers /tools/resumable_update.py "$STATE" "$SCRAPER" $SESSION $chamber \
               --scrape --datadir /out --cachedir /cache --rpm "$RPM" --retries 5 --retry_wait 30 \
               2>&1 | tee scrape.log | tail -n 200
           fi
