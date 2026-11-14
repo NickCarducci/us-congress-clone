@@ -147,6 +147,8 @@ jobs:
           NEW_YORK_API_KEY: ${{ secrets.NEW_YORK_API_KEY }}
           INDIANA_API_KEY: ${{ secrets.INDIANA_API_KEY }}
           DC_API_KEY: ${{ secrets.DC_API_KEY }}
+        # --nonstrict: a bill that fails Open States' schema (a new action type,
+        # say) is written and logged instead of ending a scrape hours in.
         run: |
           mkdir -p out cache
           chamber=${CHAMBER:+chamber=$CHAMBER}
@@ -154,14 +156,14 @@ jobs:
           if [ "$STATE" = ca ]; then
             # Starts MariaDB, downloads and loads CA's export, then runs os-update ca "$@".
             docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
-              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $chamber --scrape --datadir /out \
+              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $chamber --scrape --nonstrict --datadir /out \
               2>&1 | tee scrape.log | tail -n 200
           else
             docker run --rm $keys -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
               -w /opt/openstates/openstates -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers \
               --entrypoint python \
               os-scrapers /tools/resumable_update.py "$STATE" "$SCRAPER" $SESSION $chamber \
-              --scrape --datadir /out --cachedir /cache --rpm "$RPM" --retries 5 --retry_wait 30 \
+              --scrape --nonstrict --datadir /out --cachedir /cache --rpm "$RPM" --retries 5 --retry_wait 30 \
               2>&1 | tee scrape.log | tail -n 200
           fi
           exit ${PIPESTATUS[0]}
@@ -172,8 +174,11 @@ jobs:
         if: always()
         run: |
           bills=$(find out -name 'bill_*.json' 2>/dev/null | wc -l)
+          # --nonstrict: a bill failing Open States' schema is kept and logged, not fatal.
+          invalid=$(grep -c "failed validation\|validation of .* failed" scrape.log 2>/dev/null || true)
+          [ "${invalid:-0}" = 0 ] && invalid=""
           echo "bills=$bills" >> "$GITHUB_OUTPUT"
-          echo "### $STATE $CHAMBER: ${{ steps.scrape.outcome }}, $bills bills" >> "$GITHUB_STEP_SUMMARY"
+          echo "### $STATE $CHAMBER: ${{ steps.scrape.outcome }}, $bills bills${invalid:+ ($invalid failed Open States' validation; kept)}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save the page cache
         if: always() && env.STATE != 'ca'

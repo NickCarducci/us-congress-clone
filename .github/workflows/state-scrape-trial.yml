@@ -117,13 +117,13 @@ jobs:
           if [ "$STATE" = ca ]; then
             # Starts MariaDB, downloads and loads CA's export, then runs os-update ca "$@".
             docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
-              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $CHAMBER $EXTRA --scrape --datadir /out 2>&1 | tee scrape.log | tail -n 200
+              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $CHAMBER $EXTRA --scrape --nonstrict --datadir /out 2>&1 | tee scrape.log | tail -n 200
           else
             docker run --rm -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
               -w /opt/openstates/openstates -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers \
               --entrypoint python \
               os-scrapers /tools/resumable_update.py "$STATE" "${{ inputs.scraper || 'bills' }}" $SESSION $CHAMBER $EXTRA \
-              --scrape --datadir /out --cachedir /cache 2>&1 | tee scrape.log | tail -n 200
+              --scrape --nonstrict --datadir /out --cachedir /cache 2>&1 | tee scrape.log | tail -n 200
           fi
           status=${PIPESTATUS[0]}
           set -e
