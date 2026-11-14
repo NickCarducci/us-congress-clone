@@ -28,6 +28,13 @@ class PatchStateScrapers(unittest.TestCase):
         patches.main(root)
         self.assertEqual((root / "scrapers/sc/bills.py").read_text(), "rewritten upstream\n")
 
+    def test_a_workaround_steps_aside_once_upstream_has_the_real_fix(self):
+        root = self.tree()
+        md = root / "scrapers/md/__init__.py"
+        md.write_text(md.read_text() + '    {"_scraped_name": "2027 Regular Session", "identifier": "2027RS"},\n')
+        patches.main(root)
+        self.assertNotIn("patched in by us-congress-clone", md.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@
 database, as one <st>_<session>.json.gz per state and session: a JSON list of
 bills in the shape Open States' own session JSON uses, which the app's
 stateBillCatalog.cjs reads (identifier, title, legislative_session,
-chamber, classification, subject, abstracts, sources, actions with
+chamber, from_organization_name, classification, subject, abstracts, sources, actions with
 organization__name, sponsors with primary).
 
     python3 export_dump_sessions.py <out-dir> [--first-year 2009] [--states nj,pa]
@@ -35,7 +35,7 @@ SELECT s.id, s.identifier, s.start_date, j.id AS jurisdiction_id
 """
 
 BILLS = """
-SELECT b.id, b.identifier, b.title, b.classification, b.subject, o.classification AS chamber
+SELECT b.id, b.identifier, b.title, b.classification, b.subject, o.classification AS chamber, o.name AS chamber_name
   FROM opencivicdata_bill b
   LEFT JOIN opencivicdata_organization o ON o.id = b.from_organization_id
  WHERE b.legislative_session_id = %s
@@ -123,6 +123,8 @@ def main():
         bills = {row["id"]: {"identifier": row["identifier"], "title": row["title"],
                              "legislative_session": session["identifier"],
                              "chamber": row["chamber"] if row["chamber"] in ("upper", "lower", "legislature") else None,
+                             # The state's own name for it ("Assembly", "House of Delegates").
+                             "from_organization_name": row["chamber_name"] if row["chamber"] in ("upper", "lower", "legislature") else None,
                              "classification": array(row["classification"]), "subject": array(row["subject"]),
                              "actions": [], "sponsors": [], "abstracts": [], "sources": []}
                  for row in cursor.fetchall()}

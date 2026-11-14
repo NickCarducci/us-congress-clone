@@ -41,7 +41,8 @@ PATCHES = [
         text = data.content.decode("cp1252", errors="replace").removeprefix("\u00ef\u00bb\u00bf")'''),
     # Maryland's site lists a 2027 regular and a 2026 special session the
     # scraper's metadata doesn't have yet; os-update refuses to run until every
-    # listed session is known. Ignore them until upstream adds them.
+    # listed session is known. Ignore them until upstream adds them (UNLESS
+    # below drops this patch once upstream knows either session).
     ("scrapers/md/__init__.py",
      '''    ignored_scraped_sessions = [
 ''',
@@ -51,13 +52,21 @@ PATCHES = [
 '''),
 ]
 
+# A patch is skipped when its file already contains any of these: upstream has
+# done properly what the patch worked around.
+UNLESS = {
+    "scrapers/md/__init__.py": ['"_scraped_name": "2027 Regular Session"', '"_scraped_name": "2026 Special Session"'],
+}
+
 
 def main(root):
     root = pathlib.Path(root)
     for relative, old, new in PATCHES:
         path = root / relative
         text = path.read_text()          # a missing file is a real error
-        if new in text:
+        if new not in text and any(marker in text for marker in UNLESS.get(relative, [])):
+            print(f"{relative}: upstream now handles this; patch not needed")
+        elif new in text:
             print(f"{relative}: already patched")
         elif old in text:
             path.write_text(text.replace(old, new, 1))

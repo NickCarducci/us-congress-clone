@@ -30,8 +30,12 @@ concurrency:
   cancel-in-progress: false   # a long state must finish; the next pass queues
 
 env:
-  # openstates/openstates-scrapers (GPL-3.0), pinned for reproducibility.
-  SCRAPERS_SHA: 51fa072bacef2d80499945bc11f870fc5e5c4db8
+  # openstates/openstates-scrapers (GPL-3.0), followed at its latest commit:
+  # Open States adds each legislature's new session there (every January for
+  # most states), and a pinned copy would keep scraping the old one or refuse
+  # to run on the new one. scripts/patch_state_scrapers.py skips any of our
+  # patches upstream has made unnecessary; the commit used is in each run's summary.
+  SCRAPERS_REF: main
 
 jobs:
   plan:
@@ -71,11 +75,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: openstates/openstates-scrapers
-          ref: ${{ env.SCRAPERS_SHA }}
+          ref: ${{ env.SCRAPERS_REF }}
           path: scrapers
 
       - name: Patch scrapers for legislature-site changes
-        run: python3 clone/scripts/patch_state_scrapers.py scrapers
+        run: |
+          echo "Open States scrapers at $(git -C scrapers rev-parse --short HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 clone/scripts/patch_state_scrapers.py scrapers
 
       - name: Build the scraper image
         run: |
