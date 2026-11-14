@@ -28,7 +28,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: state-bill-watcher
+  # Scheduled passes queue behind each other; a run for named states (by hand)
+  # has its own queue, so it needn't wait hours for a pass on other states.
+  group: state-bill-watcher-${{ inputs.states || 'all' }}
   cancel-in-progress: false   # a long state must finish; the next pass queues
 
 env:
