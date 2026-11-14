@@ -1,7 +1,7 @@
 """Exports Open States' monthly PostgreSQL dump, already restored into a local
 database, as one <st>_<session>.json.gz per state and session: a JSON list of
 bills in the shape Open States' own session JSON uses, which the app's
-import-openstates-bulk.cjs reads (identifier, title, legislative_session,
+stateBillCatalog.cjs reads (identifier, title, legislative_session,
 chamber, classification, subject, abstracts, sources, actions with
 organization__name, sponsors with primary).
 
@@ -39,6 +39,7 @@ SELECT b.id, b.identifier, b.title, b.classification, b.subject, o.classificatio
   FROM opencivicdata_bill b
   LEFT JOIN opencivicdata_organization o ON o.id = b.from_organization_id
  WHERE b.legislative_session_id = %s
+ ORDER BY b.identifier, b.id
 """
 
 # Children for one session's bills, keyed by bill id.
@@ -48,22 +49,26 @@ CHILDREN = {
           FROM opencivicdata_billaction a
           JOIN opencivicdata_bill b ON b.id = a.bill_id
           LEFT JOIN opencivicdata_organization o ON o.id = a.organization_id
-         WHERE b.legislative_session_id = %s""",
+         WHERE b.legislative_session_id = %s
+         ORDER BY a.bill_id, a.date, a."order", a.id""",
     "sponsors": """
         SELECT s.bill_id, s.name, s."primary"
           FROM opencivicdata_billsponsorship s
           JOIN opencivicdata_bill b ON b.id = s.bill_id
-         WHERE b.legislative_session_id = %s""",
+         WHERE b.legislative_session_id = %s
+         ORDER BY s.bill_id, s.id""",
     "abstracts": """
         SELECT x.bill_id, x.abstract
           FROM opencivicdata_billabstract x
           JOIN opencivicdata_bill b ON b.id = x.bill_id
-         WHERE b.legislative_session_id = %s""",
+         WHERE b.legislative_session_id = %s
+         ORDER BY x.bill_id, x.id""",
     "sources": """
         SELECT x.bill_id, x.url
           FROM opencivicdata_billsource x
           JOIN opencivicdata_bill b ON b.id = x.bill_id
-         WHERE b.legislative_session_id = %s""",
+         WHERE b.legislative_session_id = %s
+         ORDER BY x.bill_id, x.id""",
 }
 
 
@@ -141,8 +146,11 @@ def main():
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", session["identifier"])
         path = os.path.join(args.out, state, f"{state}_{safe}.json.gz")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with gzip.open(path, "wt", encoding="utf-8") as handle:
-            json.dump(list(bills.values()), handle, separators=(",", ":"), default=str)
+        # Repeatable bytes (fixed order, no gzip timestamp), so an unchanged
+        # session syncs as unchanged.
+        payload = json.dumps(list(bills.values()), separators=(",", ":"), default=str).encode("utf-8")
+        with open(path, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0, filename="") as handle:
+            handle.write(payload)
         size = os.path.getsize(path)
         total_bills += len(bills)
         total_bytes += size

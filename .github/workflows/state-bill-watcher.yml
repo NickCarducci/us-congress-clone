@@ -1,7 +1,7 @@
 # Current-session bills for every state legislature, the way bill-watcher.yml
 # mirrors Congress: Open States' open-source scrapers (GPL-3.0) read each
-# legislature's own site here, the bill JSON is synced to the server, and the
-# app imports it into the state feed's store (state_legislative_bills). No
+# legislature's own site here, the bill JSON is synced to the server as files
+# (like us-congress-data), and the app's catalog for that state is rebuilt. No
 # Open States account or API quota is spent on scraped states; the app's API
 # watcher keeps covering the rest (state-sources.json says which and why).
 #
@@ -155,7 +155,7 @@ jobs:
           key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
 
       # Bills from a run that failed or was cut off are still real bills: sync
-      # what was scraped (each row is upserted by state, session and number).
+      # what was scraped (the catalog keeps one entry per state, session and number).
       - name: Prepare the server folder
         if: always() && steps.count.outputs.bills > 0
         uses: appleboy/ssh-action@v1
@@ -164,31 +164,28 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
           envs: LABEL
-          script: mkdir -p "/home/ubuntu/state-bills-data/$LABEL"
+          script: mkdir -p "/home/ubuntu/state-bills-data/scrape/$LABEL"
 
       # --delete only clears this job's own folder of the previous run's files
-      # (the scraper names each file with a fresh UUID); stored rows stay.
+      # (the scraper names each file with a fresh UUID).
       - name: Sync bill data to server
         if: always() && steps.count.outputs.bills > 0
         uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -az -4 --delete --include=bill_*.json --exclude=*
           path: out/${{ matrix.state }}/
-          remote_path: /home/ubuntu/state-bills-data/${{ env.LABEL }}/
+          remote_path: /home/ubuntu/state-bills-data/scrape/${{ env.LABEL }}/
           remote_host: ${{ secrets.SCYTALE_HOST }}
           remote_user: ubuntu
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
 
-      - name: Import into the state feed
+      - name: Rebuild the state's catalog
         if: always() && steps.count.outputs.bills > 0
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SCYTALE_HOST }}
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
-          envs: LABEL
+          envs: STATE
           command_timeout: 30m
-          script: |
-            set -eu
-            cd /home/ubuntu/microservice
-            node Consumers/POP-U-LIST/scripts/import-openstates-bulk.cjs "/home/ubuntu/state-bills-data/$LABEL" --status=scraped --env-from-pm2
+          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data "$STATE"

@@ -33,11 +33,18 @@ minutes quota.
   legislature, from Open States' open-source scrapers (GPL-3.0) run against
   each legislature's own site. Daily pass at 06:00 UTC plus a 13:30 UTC pass
   that resumes anything cut off (pages fetched that day are cached). Bill JSON
-  is rsynced to the server and imported into the app's state feed.
+  is rsynced to the server (`state-bills-data/scrape/`) and that state's
+  catalog is rebuilt from files, the same way as Congress (no database).
   `state-sources.json` sets each state's handling: split by chamber, request
   rate, a state API key secret (`NEW_YORK_API_KEY`, `INDIANA_API_KEY`,
   `DC_API_KEY`), or `api` for states whose sites refuse GitHub (IL, TX), which
   the app's Open States API watcher covers instead.
+- **`state-bills-dump.yml`** — the base layer: Open States' public monthly
+  PostgreSQL dump (every state, every session; no account or key). Restores
+  only the bill tables, exports each session as repeatable gzipped JSON, rsyncs
+  by checksum (unchanged sessions aren't sent) to `state-bills-data/dump/`, and
+  rebuilds every state's catalog. The catalog keeps the copy of each bill with
+  the later latest action, so the month-old dump never undoes the daily scrape.
 - **`state-scrape-trial.yml`** — one-off scrape of a single state (artifact
   only, nothing synced), for testing a state's scraper.
 - **`rollcall-watcher.yml`** — clones roll-call vote data and sitting

@@ -1,10 +1,12 @@
 # The base layer for state bills: Open States' monthly PostgreSQL dump (public
 # domain, no account or key: data.openstates.org/postgres/monthly/), which
 # holds every state's sessions as of the 1st of the month. Only the bill
-# tables are restored, each state's sessions are exported as JSON, synced to
-# the server and imported into the state feed's store.
+# tables are restored, each state's sessions are exported as JSON and synced to
+# the server as files (like us-congress-data), and every state's catalog is
+# rebuilt. Exports are byte-for-byte repeatable, so rsync only sends the
+# sessions that changed since last month.
 #
-# The import never puts an older bill over a newer one, so this monthly
+# The catalog never puts an older bill over a newer one, so this monthly
 # snapshot fills history and every state's current session without undoing
 # state-bill-watcher.yml's daily scrape. For states we can't scrape (IL and TX
 # refuse GitHub; NY, IN and DC need keys) it is the main source, with the
@@ -28,8 +30,8 @@ on:
         description: Comma-separated state codes (empty = all 50 and DC)
         default: ""
         required: false
-      import:
-        description: Sync and import into the app (off = export and report sizes only)
+      sync:
+        description: Sync to the server and rebuild catalogs (off = export and report sizes only)
         type: boolean
         default: false
 
@@ -48,8 +50,8 @@ jobs:
       MONTH: ${{ inputs.month }}
       FIRST_YEAR: ${{ inputs.first_year }}
       STATES: ${{ inputs.states }}
-      # A scheduled run imports; a manual one only when asked.
-      IMPORT: ${{ github.event_name == 'schedule' || inputs.import }}
+      # A scheduled run syncs; a manual one only when asked.
+      SYNC: ${{ github.event_name == 'schedule' || inputs.sync }}
       PGHOST: 127.0.0.1
       PGUSER: postgres
       PGPASSWORD: postgres
@@ -125,7 +127,7 @@ jobs:
           du -sh export
 
       - name: Prepare the server folder
-        if: env.IMPORT == 'true'
+        if: env.SYNC == 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SCYTALE_HOST }}
@@ -134,27 +136,23 @@ jobs:
           script: mkdir -p /home/ubuntu/state-bills-data/dump && df -h /home/ubuntu
 
       - name: Sync the export to the server
-        if: env.IMPORT == 'true'
+        if: env.SYNC == 'true'
         uses: burnett01/rsync-deployments@7.0.1
         with:
-          switches: -a -4 --delete
+          # Checksums, not times: an unchanged session's file is identical, so it isn't sent.
+          switches: -r -c -4
           path: export/
           remote_path: /home/ubuntu/state-bills-data/dump/
           remote_host: ${{ secrets.SCYTALE_HOST }}
           remote_user: ubuntu
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
 
-      - name: Import into the state feed
-        if: env.IMPORT == 'true'
+      - name: Rebuild the catalogs
+        if: env.SYNC == 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SCYTALE_HOST }}
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
-          command_timeout: 300m
-          script: |
-            set -eu
-            cd /home/ubuntu/microservice
-            for dir in /home/ubuntu/state-bills-data/dump/*/; do
-              node Consumers/POP-U-LIST/scripts/import-openstates-bulk.cjs "$dir" --status=bulk --env-from-pm2
-            done
+          command_timeout: 120m
+          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data
