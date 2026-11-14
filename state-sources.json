@@ -15,7 +15,7 @@
     "ny": {"secret": "NEW_YORK_API_KEY", "_note": "Open Legislation API key (free): legislation.nysenate.gov"},
     "in": {"secret": "INDIANA_API_KEY", "_note": "Indiana General Assembly API key: docs.api.iga.in.gov"},
     "dc": {"secret": "DC_API_KEY", "_note": "DC Council LIMS API key"},
-    "il": {"source": "api", "_note": "ilga.gov answers 403 to GitHub and to a home connection alike"},
-    "tx": {"source": "api", "_note": "Texas Legislature's FTP resets GitHub's connections, even at 20 rpm"}
+    "il": {"source": "api", "_note": "ilga.gov answers 403 to GitHub and times out from the app server (AWS); left to LegiScan and the Open States API watcher"},
+    "tx": {"source": "server", "_note": "Texas Legislature's FTP resets GitHub's connections, even at 20 rpm, but answers the app server: scraped there daily (scripts/server_scrape.sh, cron)"}
   }
 }

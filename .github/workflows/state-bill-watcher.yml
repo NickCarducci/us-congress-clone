@@ -26,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  issues: write   # a failed scrape check opens an issue
 
 concurrency:
   # Scheduled passes queue behind each other; a run for named states (by hand)
@@ -59,8 +60,42 @@ jobs:
           ssh -i ~/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "ubuntu@$HOST" \
             'cd /home/ubuntu/state-bills-data/scrape 2>/dev/null && for f in */.scraped_at; do [ -f "$f" ] && echo "${f%/.scraped_at} $(cat "$f")"; done; true' \
             > scraped_at.txt || : > scraped_at.txt
+          # Each scrape's last checkpoint (scripts/checkpointed_scrape.sh), here and on the server.
+          ssh -i ~/scytale.key -o ConnectTimeout=20 "ubuntu@$HOST" \
+            'cd /home/ubuntu/state-bills-data/scrape 2>/dev/null && for f in */.health.json; do [ -f "$f" ] && cat "$f"; done; true' \
+            > health.jsonl || : > health.jsonl
           rm -f ~/scytale.key
           echo "$(wc -l < scraped_at.txt) scrape times read"
+      # One open issue per state whose last scrape failed its check or crashed;
+      # closed again by hand once fixed. Cut-off scrapes aren't failures.
+      - name: Open issues for failed scrapes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY' > failed.tsv
+          import json
+          for line in open("health.jsonl"):
+              line = line.strip()
+              if not line:
+                  continue
+              try:
+                  h = json.loads(line)
+              except ValueError:
+                  continue
+              if h.get("phase") == "failed":
+                  detail = "; ".join(h.get("examples") or [])
+                  print("\t".join([h.get("label", "?"), h.get("at", ""), h.get("message", ""),
+                                   f'{h.get("bills", 0)} bills, {h.get("invalid", 0)} improper', detail]))
+          PY
+          while IFS=$'\t' read -r label at message counts detail; do
+            title="State scrape failed: $label"
+            if [ -z "$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number -q '.[0].number')" ]; then
+              gh issue create -R "$GITHUB_REPOSITORY" --title "$title" \
+                --body "$message ($at): $counts. ${detail:-}"$'\n\n'"From the scrape's last checkpoint (scrape/$label/.health.json on the server)." \
+                && echo "opened: $title"
+            fi
+          done < failed.tsv
+
       - id: plan
         env:
           STATES: ${{ inputs.states }}
@@ -124,23 +159,39 @@ jobs:
           echo "Current session: ${session:-(scraper default)}"
           [ -n "$session" ] && echo "args=session=$session" >> "$GITHUB_OUTPUT" || echo "args=" >> "$GITHUB_OUTPUT"
 
-      - name: Today's page cache key
+      - name: Page cache keys
         id: cache
-        run: echo "prefix=state-bills-cache-$LABEL-$(date -u +%Y%m%d)-" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "day=state-bills-cache-$LABEL-$(date -u +%Y%m%d)-" >> "$GITHUB_OUTPUT"
+          echo "resume=state-bills-cache-$LABEL-resume-" >> "$GITHUB_OUTPUT"
 
-      # Resume: a later pass the same day reuses the pages already fetched; a
-      # new day starts fresh so the scrape never serves yesterday's pages.
-      - name: Restore today's page cache
+      # Resume: a later pass the same day reuses the pages already fetched. A
+      # scrape that was cut off or failed also leaves its pages under "resume",
+      # so the next pass, even on a later day, carries on from them; a finished
+      # scrape leaves an empty "resume" entry, so the next day starts fresh.
+      - name: Restore the page cache
         uses: actions/cache/restore@v4
         with:
           path: cache
-          key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
-          restore-keys: ${{ steps.cache.outputs.prefix }}
+          key: ${{ steps.cache.outputs.day }}${{ github.run_id }}
+          restore-keys: |
+            ${{ steps.cache.outputs.day }}
+            ${{ steps.cache.outputs.resume }}
 
+      - name: Server key for syncing
+        env:
+          KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+        run: install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
+
+      # Checkpoints (scripts/checkpointed_scrape.sh): at 20 minutes and then
+      # hourly, what's scraped so far is checked; proper bills are synced to the
+      # server as they come, improper ones stop the scrape and fail the job (the
+      # plan job opens an issue). At 5h30m the scrape stops itself and syncs, so
+      # the job's 6-hour limit never loses work. --nonstrict: a bill failing Open
+      # States' schema (a new action type) is written and logged, not fatal.
       - name: Scrape bills (no database)
         id: scrape
-        # Stops 20 minutes before the job does, so what it got is still synced.
-        timeout-minutes: 340
+        timeout-minutes: 350
         env:
           SESSION: ${{ steps.session.outputs.args }}
           RPM: ${{ matrix.rpm }}
@@ -149,82 +200,74 @@ jobs:
           NEW_YORK_API_KEY: ${{ secrets.NEW_YORK_API_KEY }}
           INDIANA_API_KEY: ${{ secrets.INDIANA_API_KEY }}
           DC_API_KEY: ${{ secrets.DC_API_KEY }}
-        # --nonstrict: a bill that fails Open States' schema (a new action type,
-        # say) is written and logged instead of ending a scrape hours in.
+          SYNC_HOST: ${{ secrets.SCYTALE_HOST }}
+          DEADLINE: "19800"
         run: |
           mkdir -p out cache
+          export SYNC_KEY=~/scytale.key
           chamber=${CHAMBER:+chamber=$CHAMBER}
           keys="-e NEW_YORK_API_KEY -e INDIANA_API_KEY -e DC_API_KEY"
+          name="scrape-$LABEL"
           if [ "$STATE" = ca ]; then
             # Starts MariaDB, downloads and loads CA's export, then runs os-update ca "$@".
-            docker run --rm -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
-              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $chamber --scrape --nonstrict --datadir /out \
-              2>&1 | tee scrape.log | tail -n 200
+            set -- docker run --rm --name "$name" -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
+              os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $chamber --scrape --nonstrict --datadir /out
           else
-            docker run --rm $keys -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
+            set -- docker run --rm --name "$name" $keys -v "$PWD/out:/out" -v "$PWD/cache:/cache" -v "$PWD/clone/scripts:/tools:ro" \
               -w /opt/openstates/openstates -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers \
               --entrypoint python \
               os-scrapers /tools/resumable_update.py "$STATE" "$SCRAPER" $SESSION $chamber \
-              --scrape --nonstrict --datadir /out --cachedir /cache --rpm "$RPM" --retries 5 --retry_wait 30 \
-              2>&1 | tee scrape.log | tail -n 200
+              --scrape --nonstrict --datadir /out --cachedir /cache --rpm "$RPM" --retries 5 --retry_wait 30
           fi
-          exit ${PIPESTATUS[0]}
+          code=0
+          clone/scripts/checkpointed_scrape.sh "$STATE" "$LABEL" "out/$STATE" "${SESSION#session=}" "$name" -- "$@" || code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit $code
 
-      # Its own step, so a scrape cut off by its timeout still reports what it got.
+      # Its own step, so a scrape cut off or failed still reports what it got.
       - name: Count bills
         id: count
         if: always()
         run: |
           bills=$(find out -name 'bill_*.json' 2>/dev/null | wc -l)
-          # --nonstrict: a bill failing the Open States schema is kept and logged, not fatal.
           invalid=$(grep -c "failed validation\|validation of .* failed" scrape.log 2>/dev/null || true)
           [ "${invalid:-0}" = 0 ] && invalid=""
+          case "${{ steps.scrape.outputs.code }}" in
+            0) how="finished" ;;
+            124) how="cut off at the time limit (synced so far; the next pass resumes)" ;;
+            3) how="stopped: what was scraped isn't proper bill data" ;;
+            *) how="${{ steps.scrape.outcome }}" ;;
+          esac
           echo "bills=$bills" >> "$GITHUB_OUTPUT"
-          echo "### $STATE $CHAMBER: ${{ steps.scrape.outcome }}, $bills bills${invalid:+ ($invalid failed Open States validation; kept)}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### $STATE $CHAMBER: $how, $bills bills${invalid:+ ($invalid failed Open States validation; kept)}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Save the page cache
+      - name: Save the page cache (today)
         if: always() && env.STATE != 'ca'
         uses: actions/cache/save@v4
         with:
           path: cache
-          key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
+          key: ${{ steps.cache.outputs.day }}${{ github.run_id }}
 
-      # Only a scrape that finished is synced: the app uses a scraped session
-      # in place of the dump's copy of it, so a run that failed or was cut off
-      # (and resumes from today's page cache in the next run) leaves the last
-      # complete scrape, or else the dump, in place.
-      - name: Prepare the server folder
-        if: steps.scrape.outcome == 'success' && steps.count.outputs.bills > 0
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SCYTALE_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SCYTALE_SSH_KEY }}
-          envs: LABEL
-          script: mkdir -p "/home/ubuntu/state-bills-data/scrape/$LABEL"
+      # Unfinished: the pages, for the next pass to resume. Finished: nothing.
+      - name: Empty the resume cache after a finished scrape
+        if: always() && env.STATE != 'ca' && steps.scrape.outputs.code == '0'
+        run: rm -rf cache && mkdir cache && echo "finished $(date -u +%FT%TZ)" > cache/.finished
 
-      # --delete only clears this job's own folder of the previous run's files
-      # (the scraper names each file with a fresh UUID).
-      - name: Sync bill data to server
-        if: steps.scrape.outcome == 'success' && steps.count.outputs.bills > 0
-        uses: burnett01/rsync-deployments@7.0.1
+      - name: Save the resume cache
+        if: always() && env.STATE != 'ca'
+        uses: actions/cache/save@v4
         with:
-          switches: -az -4 --delete --include=bill_*.json --exclude=*
-          path: out/${{ matrix.state }}/
-          remote_path: /home/ubuntu/state-bills-data/scrape/${{ env.LABEL }}/
-          remote_host: ${{ secrets.SCYTALE_HOST }}
-          remote_user: ubuntu
-          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
+          path: cache
+          key: ${{ steps.cache.outputs.resume }}${{ github.run_id }}
 
-      - name: Rebuild the state's catalog
-        if: steps.scrape.outcome == 'success' && steps.count.outputs.bills > 0
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SCYTALE_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SCYTALE_SSH_KEY }}
-          command_timeout: 30m
-          envs: STATE,LABEL
-          script: |
-            node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data "$STATE"
-            date -u +%Y-%m-%dT%H:%M:%SZ > "/home/ubuntu/state-bills-data/scrape/$LABEL/.scraped_at"
+      # A finished scrape replaces the state's scraped bills on the server
+      # (partial syncs only add) and stamps when it finished.
+      - name: Sync the finished scrape
+        if: steps.scrape.outputs.code == '0' && steps.count.outputs.bills > 0
+        env:
+          SYNC_HOST: ${{ secrets.SCYTALE_HOST }}
+        run: SYNC_KEY=~/scytale.key clone/scripts/sync_scrape.sh final "$STATE" "$LABEL" "out/$STATE"
+
+      - name: Remove the server key
+        if: always()
+        run: rm -f ~/scytale.key
