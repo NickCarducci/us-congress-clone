@@ -190,5 +190,5 @@ jobs:
           command_timeout: 30m
           script: |
             set -eu
-            cd /home/ubuntu/microservice   # its .env holds the store's connection
-            node Consumers/POP-U-LIST/scripts/import-openstates-bulk.cjs "/home/ubuntu/state-bills-data/$LABEL" --status=scraped
+            cd /home/ubuntu/microservice
+            node Consumers/POP-U-LIST/scripts/import-openstates-bulk.cjs "/home/ubuntu/state-bills-data/$LABEL" --status=scraped --env-from-pm2
