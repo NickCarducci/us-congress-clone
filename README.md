@@ -43,14 +43,10 @@ minutes quota.
   rate, a state API key secret (`NEW_YORK_API_KEY`, `INDIANA_API_KEY`,
   `DC_API_KEY`), or `api` for states whose sites refuse GitHub (IL, TX), which
   the app's Open States API watcher covers instead.
-- **`state-bills-legiscan.yml`** — the base layer: LegiScan's weekly session
-  datasets for every state's current sessions. One `getDatasetList` query a
-  day; only sessions whose archive changed are downloaded (`getDataset`, one
-  query each), converted to Open States' session-JSON shape
-  (`scripts/legiscan_datasets.py`), and synced to `state-bills-data/legiscan/`.
-  The app files each LegiScan session under the Open States session holding
-  most of its bill numbers, so bill ids don't change with the source. Repo
-  secret `LEGISCAN_API_KEY`; without it the workflow does nothing.
+- **LegiScan's weekly session datasets** (the base layer) are not fetched
+  here: the app server fetches them itself (POP-U-LIST
+  `scripts/legiscan-daily.sh`, daily from cron), so LegiScan's API sees one
+  static origin rather than GitHub's changing runner addresses.
 - **`state-bills-dump.yml`** — the fallback base layer: Open States' public monthly
   PostgreSQL dump (every state, every session; no account or key). Restores
   only the bill tables, exports each session as repeatable gzipped JSON, rsyncs
