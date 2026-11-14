@@ -43,11 +43,20 @@ minutes quota.
   rate, a state API key secret (`NEW_YORK_API_KEY`, `INDIANA_API_KEY`,
   `DC_API_KEY`), or `api` for states whose sites refuse GitHub (IL, TX), which
   the app's Open States API watcher covers instead.
-- **`state-bills-dump.yml`** — the base layer: Open States' public monthly
+- **`state-bills-legiscan.yml`** — the base layer: LegiScan's weekly session
+  datasets for every state's current sessions. One `getDatasetList` query a
+  day; only sessions whose archive changed are downloaded (`getDataset`, one
+  query each), converted to Open States' session-JSON shape
+  (`scripts/legiscan_datasets.py`), and synced to `state-bills-data/legiscan/`.
+  The app files each LegiScan session under the Open States session holding
+  most of its bill numbers, so bill ids don't change with the source. Repo
+  secret `LEGISCAN_API_KEY`; without it the workflow does nothing.
+- **`state-bills-dump.yml`** — the fallback base layer: Open States' public monthly
   PostgreSQL dump (every state, every session; no account or key). Restores
   only the bill tables, exports each session as repeatable gzipped JSON, rsyncs
   by checksum (unchanged sessions aren't sent) to `state-bills-data/dump/`, and
-  rebuilds every state's catalog. It's the fallback: a session (or, for a state
+  rebuilds every state's catalog. It fills sessions LegiScan doesn't have
+  (older ones, or any LegiScan can't be matched to). Above both, a session (or, for a state
   scraped by chamber, a chamber of a session) the daily scrape has replaces the
   dump's copy of it whole.
 - **`state-scrape-trial.yml`** — one-off scrape of a single state (artifact
