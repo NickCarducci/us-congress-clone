@@ -118,7 +118,10 @@ jobs:
       - name: Pick the current session
         id: session
         run: |
+          # Some scrapers read their API key when imported (DC); the picker only
+          # reads session metadata, so a placeholder will do.
           session=$(docker run --rm -v "$PWD/clone/scripts:/picker:ro" -w /opt/openstates/openstates \
+            -e DC_API_KEY=unused -e NEW_YORK_API_KEY=unused -e INDIANA_API_KEY=unused \
             -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers --entrypoint python \
             os-scrapers /picker/current_session.py "$STATE")
           echo "Current session: ${session:-(scraper default)}"

@@ -30,6 +30,7 @@ rm -rf "$work/out"; mkdir -p "$work/out" "$work/cache"
 
 py() { docker run --rm "$@"; }
 session=$(py -v "$here:/tools:ro" -w /opt/openstates/openstates \
+  -e DC_API_KEY=unused -e NEW_YORK_API_KEY=unused -e INDIANA_API_KEY=unused \
   -e PYTHONPATH=/opt/openstates/openstates:/opt/openstates/openstates/scrapers --entrypoint python \
   "$image" /tools/current_session.py "$state")
 echo "session: ${session:-(scraper default)}"
