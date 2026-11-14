@@ -144,7 +144,7 @@ jobs:
           fi
           exit ${PIPESTATUS[0]}
 
-      # Its own step, so a scrape cut off by its timeout still reports (and syncs) what it got.
+      # Its own step, so a scrape cut off by its timeout still reports what it got.
       - name: Count bills
         id: count
         if: always()
@@ -160,10 +160,12 @@ jobs:
           path: cache
           key: ${{ steps.cache.outputs.prefix }}${{ github.run_id }}
 
-      # Bills from a run that failed or was cut off are still real bills: sync
-      # what was scraped (the catalog keeps one entry per state, session and number).
+      # Only a scrape that finished is synced: the app uses a scraped session
+      # in place of the dump's copy of it, so a run that failed or was cut off
+      # (and resumes from today's page cache in the next run) leaves the last
+      # complete scrape, or else the dump, in place.
       - name: Prepare the server folder
-        if: always() && steps.count.outputs.bills > 0
+        if: steps.scrape.outcome == 'success' && steps.count.outputs.bills > 0
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SCYTALE_HOST }}
@@ -175,7 +177,7 @@ jobs:
       # --delete only clears this job's own folder of the previous run's files
       # (the scraper names each file with a fresh UUID).
       - name: Sync bill data to server
-        if: always() && steps.count.outputs.bills > 0
+        if: steps.scrape.outcome == 'success' && steps.count.outputs.bills > 0
         uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -az -4 --delete --include=bill_*.json --exclude=*
@@ -186,7 +188,7 @@ jobs:
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
 
       - name: Rebuild the state's catalog
-        if: always() && steps.count.outputs.bills > 0
+        if: steps.scrape.outcome == 'success' && steps.count.outputs.bills > 0
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SCYTALE_HOST }}
