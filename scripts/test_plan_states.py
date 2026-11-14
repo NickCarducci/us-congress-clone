@@ -8,8 +8,8 @@ CONFIG = json.loads((here.parent / "state-sources.json").read_text())
 
 class PlanStates(unittest.TestCase):
     def test_split_states_get_a_job_per_chamber(self):
-        jobs, _ = module.plan(CONFIG, only={"ks", "nj"})
-        self.assertEqual([(j["state"], j["chamber"]) for j in jobs], [("ks", "upper"), ("ks", "lower"), ("nj", "")])
+        jobs, _ = module.plan(CONFIG, only={"pa", "nj"})
+        self.assertEqual([(j["state"], j["chamber"]) for j in jobs], [("nj", ""), ("pa", "upper"), ("pa", "lower")])
 
     def test_api_states_and_missing_keys_get_no_job(self):
         jobs, skipped = module.plan(CONFIG, only={"il", "tx", "ny"})
@@ -28,20 +28,20 @@ class PlanStates(unittest.TestCase):
 
     def test_only_changed_states_are_scraped(self):
         import datetime
-        jobs, _ = module.plan(CONFIG, only={"ks", "nj", "wy", "or"})
+        jobs, _ = module.plan(CONFIG, only={"pa", "nj", "wy", "or"})
         at = datetime.datetime(2026, 11, 14, 9, tzinfo=datetime.timezone.utc)
-        marks = module.parse_marks(f"ksupper {at.isoformat()}\nkslower 2026-11-13T09:00:00Z\nnj {at.isoformat()}\nwy {at.isoformat()}")
+        marks = module.parse_marks(f"paupper {at.isoformat()}\npalower 2026-11-13T09:00:00Z\nnj {at.isoformat()}\nwy {at.isoformat()}")
         asked = {}
         def check(state, since):
             asked[state] = since
             if state == "wy":
                 raise OSError("429")
-            return {"ks": 3, "nj": 0}[state]
+            return {"pa": 3, "nj": 0}[state]
         kept, report = module.gate(jobs, marks, check)
         self.assertEqual(sorted({(j["state"], j["chamber"]) for j in kept}),
-                         [("ks", "lower"), ("ks", "upper"), ("or", ""), ("wy", "")])
+                         [("or", ""), ("pa", "lower"), ("pa", "upper"), ("wy", "")])
         self.assertNotIn("or", asked, "never scraped: no check, just scrape")
-        self.assertEqual(asked["ks"], datetime.datetime(2026, 11, 13, 3, tzinfo=datetime.timezone.utc),
+        self.assertEqual(asked["pa"], datetime.datetime(2026, 11, 13, 3, tzinfo=datetime.timezone.utc),
                          "from the older chamber's scrape, less the overlap")
         self.assertIn("nj: unchanged since 2026-11-14 03:00 UTC, skipped", report)
 

@@ -1,5 +1,7 @@
 """os-update, resumable: pages fetched by an earlier run (kept in --cachedir)
 are served from the cache, while new requests keep the scraper's throttle.
+Also tolerates a legislature listing a session the scraper doesn't know yet
+(see _check_session_list_tolerant).
 
 Open States reads its page cache only in --fastmode, which also turns off
 throttling. scrapelib checks the cache before throttling, so allowing cache
@@ -22,7 +24,28 @@ def _resumable_init(self, *args, **kwargs):
 
 base.Scraper.__init__ = _resumable_init
 
-from openstates.cli.update import main  # noqa: E402  (after the patch)
+import openstates.cli.update as update  # noqa: E402  (after the patch)
+from openstates.exceptions import CommandError  # noqa: E402
+
+_check_session_list = update.check_session_list
+
+
+def _check_session_list_tolerant(juris):
+    """A legislature's site lists its next session (every winter) before Open
+    States adds it to the scraper, and os-update then refuses to run at all.
+    The workflow always names the session to scrape, so an unknown session
+    elsewhere on the site is only reported, not fatal. Every other check stands."""
+    try:
+        return _check_session_list(juris)
+    except CommandError as error:
+        if "were reported by" not in str(error):
+            raise
+        print(f"warning: {error} (scraping the requested session anyway)", file=sys.stderr, flush=True)
+        return {s["identifier"] for s in juris.legislative_sessions if s.get("active")}
+
+
+update.check_session_list = _check_session_list_tolerant
+main = update.main
 
 if __name__ == "__main__":
     sys.exit(main())
