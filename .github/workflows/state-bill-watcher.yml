@@ -189,6 +189,10 @@ jobs:
           code=0
           clone/scripts/checkpointed_scrape.sh "$STATE" "$LABEL" "out/$STATE" "${SESSION#session=}" "$name" -- "$@" || code=$?
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          # Cut off at the time limit is a normal outcome for a big state: its
+          # bills are synced and the next pass resumes. Only a failed check (3)
+          # or a crashed scraper turns the job red.
+          [ "$code" = 124 ] && exit 0
           exit $code
 
       # Its own step, so a scrape cut off or failed still reports what it got.
