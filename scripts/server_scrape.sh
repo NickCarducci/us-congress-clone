@@ -80,6 +80,9 @@ DEADLINE=${DEADLINE:-72000} "$here/checkpointed_scrape.sh" "$state" "$state" "ou
 
 if [ $code -eq 0 ]; then
   "$here/sync_scrape.sh" final "$state" "$state" "out/$state"
+  # Bill text too (state-bill-text-watcher.yml does this for GitHub-scraped states).
+  root=${STATE_BILLS_ROOT:-/home/ubuntu/state-bills-data}
+  python3 "$here/fetch_state_texts.py" "$root/scrape/$state" "$root/text/$state" --rpm "$rpm" --deadline 14400 || true
   date -u +%FT%TZ > "$work/.finished"
   rm -f "$work/.unfinished"
 else

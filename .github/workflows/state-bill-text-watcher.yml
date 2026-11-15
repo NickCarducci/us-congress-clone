@@ -1,0 +1,107 @@
+# State bill text, the state counterpart of bill-text-watcher.yml: each scraped
+# bill's latest version as text, for "How does this affect me?" (the app hands
+# it to ChatGPT with the laws it cites). Daily after the morning scrapes; per
+# state, only versions not fetched yet, newest activity first, paced at the
+# state's request rate, stopping before the job limit (the next run continues).
+# Reads the bill files the scrapes synced to the server and writes
+# state-bills-data/text/<st>/ (index.json + one .txt per version). States
+# scraped on the server (state-sources.json "server") fetch their text there.
+name: State Bill Text Watcher
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+    inputs:
+      states:
+        description: Comma-separated state codes (empty = every scraped state)
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: state-bill-text-${{ inputs.states || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+          HOST: ${{ secrets.SCYTALE_HOST }}
+          STATES: ${{ inputs.states }}
+        run: |
+          install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
+          ssh -i ~/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "ubuntu@$HOST" \
+            'ls /home/ubuntu/state-bills-data/scrape' > labels.txt
+          rm -f ~/scytale.key
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          config = json.load(open("state-sources.json"))
+          only = {s.strip().lower() for s in os.environ.get("STATES", "").split(",") if s.strip()}
+          states = {}
+          for label in open("labels.txt").read().split():
+              states.setdefault(label[:2], []).append(label)
+          jobs = []
+          for st, labels in sorted(states.items()):
+              settings = {**config["defaults"], **config["states"].get(st, {})}
+              if (only and st not in only) or settings.get("source") == "server" or settings.get("scraper") == "standalone":
+                  continue
+              jobs.append({"state": st, "labels": ",".join(sorted(labels)), "rpm": settings["rpm"]})
+          print("matrix=" + json.dumps({"include": jobs}))
+          PY
+
+  text:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    env:
+      STATE: ${{ matrix.state }}
+      LABELS: ${{ matrix.labels }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pdftotext
+        run: sudo apt-get install -y -q poppler-utils >/dev/null
+      - name: Server key
+        env:
+          KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+        run: install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
+      - name: Fetch the scraped bills and the text index
+        env:
+          HOST: ${{ secrets.SCYTALE_HOST }}
+        run: |
+          ssh_opts="-i $HOME/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+          mkdir -p scrape "text/$STATE"
+          for label in ${LABELS//,/ }; do
+            mkdir -p "scrape/$label"
+            rsync -az -e "ssh $ssh_opts" --include='bill_*.json' --exclude='*' "ubuntu@$HOST:/home/ubuntu/state-bills-data/scrape/$label/" "scrape/$label/"
+          done
+          rsync -az -e "ssh $ssh_opts" "ubuntu@$HOST:/home/ubuntu/state-bills-data/text/$STATE/index.json" "text/$STATE/" 2>/dev/null || true
+      - name: Fetch new bill texts
+        timeout-minutes: 345
+        run: |
+          dirs=$(for label in ${LABELS//,/ }; do printf 'scrape/%s,' "$label"; done)
+          python3 scripts/fetch_state_texts.py "${dirs%,}" "text/$STATE" --rpm "${{ matrix.rpm }}" --deadline 19800 | tee text.log
+          echo "### $STATE: $(tail -1 text.log)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Sync to the server
+        if: always()
+        env:
+          HOST: ${{ secrets.SCYTALE_HOST }}
+        run: |
+          ssh_opts="-i $HOME/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+          ssh $ssh_opts "ubuntu@$HOST" "mkdir -p /home/ubuntu/state-bills-data/text/$STATE"
+          [ -f "text/$STATE/index.json" ] && rsync -az -e "ssh $ssh_opts" "text/$STATE/" "ubuntu@$HOST:/home/ubuntu/state-bills-data/text/$STATE/"
+      - name: Remove the server key
+        if: always()
+        run: rm -f ~/scytale.key
