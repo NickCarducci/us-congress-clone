@@ -4,7 +4,7 @@
 # proper bill data, or the scrape is stopped and fails. At DEADLINE seconds the
 # scrape stops itself and syncs what it has (partial) and exits 124, so a pass
 # cut off by the job's time limit still lands and the next pass resumes from
-# the cached pages.
+# the cached pages. A scrape that crashes syncs what it got the same way.
 #
 #   checkpointed_scrape.sh <state> <label> <out dir> <session> <container> -- <docker run …>
 #
@@ -53,7 +53,14 @@ while kill -0 "$pid" 2>/dev/null; do
 done
 if [ -z "$status" ]; then
   wait "$pid"; status=$?
-  [ $status -eq 0 ] && { proper || status=3; }
+  if [ $status -eq 0 ]; then
+    proper || status=3
+  else
+    # The scraper crashed (a site error): keep the bills it got, like a
+    # cut-off pass, and let the next pass resume from the cached pages.
+    echo "the scraper exited with $status; syncing what it got"
+    proper && "$here/sync_scrape.sh" partial "$state" "$label" "$out"
+  fi
 fi
 tail -n 200 "$log"
 exit $status
