@@ -24,6 +24,13 @@ class PlanStates(unittest.TestCase):
         jobs, _ = module.plan(CONFIG, only={"va"})
         self.assertEqual(jobs[0]["scraper"], "csv_bills")
 
+    def test_a_weekly_state_runs_on_mondays_or_by_name(self):
+        import datetime
+        monday, tuesday = datetime.date(2026, 11, 16), datetime.date(2026, 11, 17)
+        self.assertIn("vi", {j["state"] for j in module.plan(CONFIG, today=monday)[0]})
+        self.assertNotIn("vi", {j["state"] for j in module.plan(CONFIG, today=tuesday)[0]})
+        self.assertIn("vi", {j["state"] for j in module.plan(CONFIG, only={"vi"}, today=tuesday)[0]})
+
     def test_every_state_is_configured(self):
         self.assertEqual(len(CONFIG["states"]), 55)   # 50 states, DC, and four territories
         jobs, _ = module.plan(CONFIG)

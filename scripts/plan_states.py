@@ -24,13 +24,17 @@ OVERLAP = datetime.timedelta(hours=6)   # Open States can see a change after we 
 PAUSE = 2.0                             # seconds between requests (the free tier is rate-limited)
 
 
-def plan(config, only=(), have_secrets=()):
+def plan(config, only=(), have_secrets=(), today=None):
     defaults = config.get("defaults", {})
     jobs, skipped = [], []
     for state, overrides in sorted(config["states"].items()):
         if only and state not in only:
             continue
         settings = {**defaults, **{k: v for k, v in overrides.items() if not k.startswith("_")}}
+        # "weekly": a scheduled pass tries it on Mondays only; naming it runs it any day.
+        if settings.get("weekly") and not only and (today or __import__("datetime").date.today()).weekday() != 0:
+            skipped.append(f"{state}: weekly (Mondays)")
+            continue
         if settings["source"] != "scraper":
             skipped.append(f"{state}: {settings['source']}")
             continue
