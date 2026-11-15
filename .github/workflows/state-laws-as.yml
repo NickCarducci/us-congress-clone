@@ -28,7 +28,9 @@ jobs:
       - name: Restore converted law texts
         uses: actions/cache/restore@v4
         with:
-          path: out/as/text
+          path: |
+            out/as/text
+            out/as/bill-text
           key: as-law-texts-${{ github.run_id }}
           restore-keys: as-law-texts-
       # Most of these laws are scans: pdftotext for those with text, Tesseract OCR for the rest.
@@ -36,13 +38,21 @@ jobs:
         run: sudo apt-get update -q >/dev/null && sudo apt-get install -y -q poppler-utils tesseract-ocr >/dev/null
       - name: Read every Legislature's public laws
         run: |
-          python3 scripts/standalone/as_public_laws.py out --text | tee laws.log
+          OCR_DEADLINE=14400 python3 scripts/standalone/as_public_laws.py out --text | tee laws.log
+          tail -1 laws.log >> "$GITHUB_STEP_SUMMARY"
+      # The Senate measures' own text (also scans), for reading the laws they cite.
+      - name: OCR the Senate measures
+        run: |
+          python3 scripts/standalone/as_fono.py bills
+          OCR_DEADLINE=3600 python3 scripts/standalone/as_bill_texts.py bills/as out | tee -a laws.log
           tail -1 laws.log >> "$GITHUB_STEP_SUMMARY"
       - name: Save converted law texts
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: out/as/text
+          path: |
+            out/as/text
+            out/as/bill-text
           key: as-law-texts-${{ github.run_id }}
       - name: Prepare the server folder
         uses: appleboy/ssh-action@v1
