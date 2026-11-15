@@ -25,7 +25,7 @@ class PlanStates(unittest.TestCase):
         self.assertEqual(jobs[0]["scraper"], "csv_bills")
 
     def test_every_state_is_configured(self):
-        self.assertEqual(len(CONFIG["states"]), 51)   # 50 states and DC
+        self.assertEqual(len(CONFIG["states"]), 55)   # 50 states, DC, and four territories
         jobs, _ = module.plan(CONFIG)
         self.assertEqual(next(j["rpm"] for j in jobs if j["state"] == "ma"), 20)
         self.assertFalse({"tx", "ga", "wi"} & {j["state"] for j in jobs}, "scraped on the app server instead")

@@ -57,7 +57,7 @@ def parse_marks(text):
 
 
 def jurisdiction(state):
-    kind = "district" if state == "dc" else "state"
+    kind = "district" if state == "dc" else "territory" if state in ("pr", "gu", "vi", "mp") else "state"
     return f"ocd-jurisdiction/country:us/{kind}:{state}/government"
 
 

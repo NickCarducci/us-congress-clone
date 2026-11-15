@@ -22,11 +22,12 @@ import psycopg2.extras
 STATES = {"ak", "al", "ar", "az", "ca", "co", "ct", "dc", "de", "fl", "ga", "hi", "ia", "id", "il", "in",
           "ks", "ky", "la", "ma", "md", "me", "mi", "mn", "mo", "ms", "mt", "nc", "nd", "ne", "nh", "nj",
           "nm", "nv", "ny", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "va", "vt", "wa",
-          "wi", "wv", "wy"}
+          "wi", "wv", "wy",
+          "pr", "gu", "vi", "mp"}   # territories Open States covers (not American Samoa)
 
 # The state's part of a jurisdiction id: ocd-jurisdiction/country:us/state:nj/government,
-# or district:dc for Washington.
-JURISDICTION = re.compile(r"/(?:state|district):([a-z]{2})/")
+# district:dc for Washington, territory:pr for Puerto Rico and the others.
+JURISDICTION = re.compile(r"/(?:state|district|territory):([a-z]{2})/")
 
 SESSIONS = """
 SELECT s.id, s.identifier, s.start_date, j.id AS jurisdiction_id
