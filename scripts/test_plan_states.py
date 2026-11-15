@@ -33,7 +33,7 @@ class PlanStates(unittest.TestCase):
         self.assertIn("zz", {j["state"] for j in module.plan(config, only={"zz"}, today=tuesday)[0]})
 
     def test_every_state_is_configured(self):
-        self.assertEqual(len(CONFIG["states"]), 55)   # 50 states, DC, and four territories
+        self.assertEqual(len(CONFIG["states"]), 56)   # 50 states, DC, and five territories
         jobs, _ = module.plan(CONFIG)
         self.assertEqual(next(j["rpm"] for j in jobs if j["state"] == "ma"), 20)
         self.assertFalse({"tx", "ga", "wi"} & {j["state"] for j in jobs}, "scraped on the app server instead")

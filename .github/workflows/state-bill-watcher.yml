@@ -109,6 +109,7 @@ jobs:
           cp -R clone/scraper_overrides/. scrapers/scrapers/
 
       - name: Build the scraper image
+        if: matrix.scraper != 'standalone'
         run: |
           # California loads the legislature's database export into MariaDB
           # (bundled in Open States' California image) before scraping it.
@@ -119,6 +120,7 @@ jobs:
           fi
 
       - name: Pick the current session
+        if: matrix.scraper != 'standalone'
         id: session
         run: |
           # Some scrapers read their API key when imported (DC); the picker only
@@ -178,7 +180,11 @@ jobs:
           chamber=${CHAMBER:+chamber=$CHAMBER}
           keys="-e NEW_YORK_API_KEY -e INDIANA_API_KEY -e DC_API_KEY"
           name="scrape-$LABEL"
-          if [ "$STATE" = ca ]; then
+          if [ "$SCRAPER" = standalone ]; then
+            # Our own scraper for a legislature no Open States scraper covers
+            # (scripts/standalone/<st>_*.py): Open States-shaped bill files, no image.
+            set -- python3 "$(ls clone/scripts/standalone/${STATE}_*.py | grep -v test_ | head -1)" out
+          elif [ "$STATE" = ca ]; then
             # Starts MariaDB, downloads and loads CA's export, then runs os-update ca "$@".
             set -- docker run --rm --name "$name" -v "$PWD/out:/out" -e PYTHONPATH=./scrapers --entrypoint /bin/bash \
               os-scrapers scrapers/ca/ca-entrypoint.sh bills $SESSION $chamber --scrape --nonstrict --datadir /out
