@@ -1,0 +1,68 @@
+# American Samoa's enacted public laws (Office of Samoan Affairs, osas.as):
+# every Legislature's table, read in full the way the site's own paging reads
+# it, with each law's text from its PDF (scripts/standalone/as_public_laws.py).
+# Synced to state-bills-data/laws/as/ for the app: which bills became law, and
+# the official text the "How does this affect me?" analysis is given for laws
+# a bill cites. Laws change rarely: weekly, or by hand.
+name: State Laws (American Samoa)
+
+on:
+  schedule:
+    - cron: "30 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: state-laws-as
+  cancel-in-progress: false
+
+jobs:
+  laws:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # The PDFs already converted are kept, so a week only converts new laws.
+      - name: Restore converted law texts
+        uses: actions/cache/restore@v4
+        with:
+          path: out/as/text
+          key: as-law-texts-${{ github.run_id }}
+          restore-keys: as-law-texts-
+      - name: Install pdftotext
+        run: sudo apt-get install -y -q poppler-utils >/dev/null
+      - name: Read every Legislature's public laws
+        run: |
+          python3 scripts/standalone/as_public_laws.py out --text | tee laws.log
+          tail -1 laws.log >> "$GITHUB_STEP_SUMMARY"
+      - name: Save converted law texts
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: out/as/text
+          key: as-law-texts-${{ github.run_id }}
+      - name: Prepare the server folder
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          script: mkdir -p /home/ubuntu/state-bills-data/laws/as
+      - name: Sync to the server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -r -c -4
+          path: out/as/
+          remote_path: /home/ubuntu/state-bills-data/laws/as/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
+      - name: Rebuild American Samoa's catalog
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data AS
