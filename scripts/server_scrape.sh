@@ -21,6 +21,28 @@ exec 9> "$work/.lock"
 flock -n 9 || { echo "$(date -u +%FT%TZ) $state already running"; exit 0; }
 echo "$(date -u +%FT%TZ) $state start"
 
+# Only when Open States has seen a change since the last finished scrape (less
+# 6 hours' overlap), the same check state-bill-watcher.yml's plan job makes.
+# No key, no earlier scrape, or a failed check: scrape anyway.
+root=${STATE_BILLS_ROOT:-/home/ubuntu/state-bills-data}
+env_file=${OPEN_STATES_ENV_FILE:-$HOME/.config/populist/openstates.env}
+[ -r "$env_file" ] && { set -a; . "$env_file"; set +a; }
+if [ -n "${OPEN_STATES_KEY:-}" ] && [ -f "$root/scrape/$state/.scraped_at" ] && [ ! -f "$work/.unfinished" ]; then
+  changed=$(python3 - "$here" "$state" "$(cat "$root/scrape/$state/.scraped_at")" <<'PY' || echo error
+import datetime, sys
+sys.path.insert(0, sys.argv[1])
+import plan_states
+since = datetime.datetime.fromisoformat(sys.argv[3].replace("Z", "+00:00")) - plan_states.OVERLAP
+print(plan_states.updated_count(sys.argv[2], since, __import__("os").environ["OPEN_STATES_KEY"]))
+PY
+)
+  if [ "$changed" = 0 ]; then
+    echo "$(date -u +%FT%TZ) $state unchanged since $(cat "$root/scrape/$state/.scraped_at"); skipped"
+    exit 0
+  fi
+  echo "changes since the last scrape: $changed"
+fi
+
 docker pull -q "$image" >/dev/null
 docker image prune -f >/dev/null   # the previous day's image, once replaced
 
@@ -48,6 +70,9 @@ DEADLINE=${DEADLINE:-72000} "$here/checkpointed_scrape.sh" "$state" "$state" "ou
 if [ $code -eq 0 ]; then
   "$here/sync_scrape.sh" final "$state" "$state" "out/$state"
   date -u +%FT%TZ > "$work/.finished"
+  rm -f "$work/.unfinished"
+else
+  date -u +%FT%TZ > "$work/.unfinished"   # the next run resumes, change or not
 fi
 echo "$(date -u +%FT%TZ) $state done ($code)"
 exit $code
