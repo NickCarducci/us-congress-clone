@@ -21,7 +21,7 @@ concurrency:
 jobs:
   laws:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 340   # OCR stops starting new laws at 5h (OCR_DEADLINE); the rest next run
     steps:
       - uses: actions/checkout@v4
       # The PDFs already converted are kept, so a week only converts new laws.
@@ -31,8 +31,9 @@ jobs:
           path: out/as/text
           key: as-law-texts-${{ github.run_id }}
           restore-keys: as-law-texts-
-      - name: Install pdftotext
-        run: sudo apt-get install -y -q poppler-utils >/dev/null
+      # Most of these laws are scans: pdftotext for those with text, Tesseract OCR for the rest.
+      - name: Install pdftotext and Tesseract
+        run: sudo apt-get update -q >/dev/null && sudo apt-get install -y -q poppler-utils tesseract-ocr >/dev/null
       - name: Read every Legislature's public laws
         run: |
           python3 scripts/standalone/as_public_laws.py out --text | tee laws.log

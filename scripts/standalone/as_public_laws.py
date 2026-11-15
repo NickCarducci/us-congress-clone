@@ -12,7 +12,8 @@ the site's own "Next" button reads it: its public data API with the visitor
 token the site hands every browser (one request a second). Should that ever
 fail, a table falls back to the rows on its page. Writes
 <out-dir>/as/public-laws.json, a list of
-{publicLaw, legislature, session, bill, asca, approved, summary, pdf, textFile};
+{publicLaw, legislature, session, bill, asca, approved, summary, pdf, textFile,
+textSource ("text", or "ocr" for a scanned law)};
 with --text, each law's PDF text (pdftotext) as <out-dir>/as/text/<P.L.>.txt,
 the official text the app's reference resolution hands to ChatGPT.
 No other source has these: Open States and LegiScan don't cover American Samoa.
@@ -171,11 +172,25 @@ def law_from_row(row, source):
 
 
 def pdf_text(pdf_bytes):
-    with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
-        handle.write(pdf_bytes)
-        handle.flush()
-        result = subprocess.run(["pdftotext", "-layout", handle.name, "-"], capture_output=True, timeout=120)
-    return result.stdout.decode("utf-8", "replace").strip()
+    """(text, how): the PDF's text layer, else OCR of its page images
+    (most of these laws are scans). ("", None) if neither yields text."""
+    with tempfile.TemporaryDirectory() as work:
+        pdf = os.path.join(work, "law.pdf")
+        with open(pdf, "wb") as handle:
+            handle.write(pdf_bytes)
+        result = subprocess.run(["pdftotext", "-layout", pdf, "-"], capture_output=True, timeout=120)
+        text = result.stdout.decode("utf-8", "replace").strip()
+        if len(re.sub(r"\s", "", text)) > 200:
+            return text, "text"
+        subprocess.run(["pdftoppm", "-r", "300", "-gray", "-png", pdf, os.path.join(work, "page")],
+                       capture_output=True, timeout=600)
+        pages = []
+        for image in sorted(f for f in os.listdir(work) if f.startswith("page") and f.endswith(".png")):
+            ocr = subprocess.run(["tesseract", os.path.join(work, image), "-", "-l", "eng"],
+                                 capture_output=True, timeout=300)
+            pages.append(ocr.stdout.decode("utf-8", "replace").strip())
+        text = "\n\n".join(p for p in pages if p)
+        return (text, "ocr") if text else ("", None)
 
 
 def main():
@@ -208,22 +223,31 @@ def main():
     laws = sorted(by_number.values(), key=lambda l: (l["legislature"], l["publicLaw"]))
     for legislature in sorted({l["legislature"] for l in laws}):
         print(f"{legislature}: {sum(1 for l in laws if l['legislature'] == legislature)} laws")
+    # Texts already converted (kept between runs) are reused; new ones are
+    # converted until OCR_DEADLINE seconds have passed, the rest next run.
+    deadline = time.time() + float(os.environ.get("OCR_DEADLINE", "18000"))
     for law in laws:
-        law["textFile"] = None
-        if args.text and law["pdf"]:
-            name = law["publicLaw"].replace("P.L. ", "PL-") + ".txt"
-            path = os.path.join(out, "text", name)
-            if not os.path.exists(path):
-                try:
-                    text = pdf_text(fetch(law["pdf"], binary=True))
-                except Exception as error:
-                    print(f"warning: {law['publicLaw']}: {error}", file=sys.stderr)
-                    continue
-                if not text:
-                    continue   # a scanned PDF with no text layer
-                with open(path, "w") as handle:
-                    handle.write(text)
-            law["textFile"] = f"text/{name}"
+        law["textFile"] = law["textSource"] = None
+        if not (args.text and law["pdf"]):
+            continue
+        name = law["publicLaw"].replace("P.L. ", "PL-")
+        path, how_path = os.path.join(out, "text", f"{name}.txt"), os.path.join(out, "text", f"{name}.how")
+        if not os.path.exists(path):
+            if time.time() > deadline:
+                continue
+            try:
+                text, how = pdf_text(fetch(law["pdf"], binary=True))
+            except Exception as error:
+                print(f"warning: {law['publicLaw']}: {error}", file=sys.stderr)
+                continue
+            if not text:
+                continue
+            with open(path, "w") as handle:
+                handle.write(text)
+            with open(how_path, "w") as handle:
+                handle.write(how)
+        law["textFile"] = f"text/{name}.txt"
+        law["textSource"] = open(how_path).read().strip() if os.path.exists(how_path) else "text"
     with open(os.path.join(out, "public-laws.json"), "w") as handle:
         json.dump(laws, handle, indent=1)
     print(f"laws: {len(laws)}, with text: {sum(1 for l in laws if l['textFile'])}")
