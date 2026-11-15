@@ -104,6 +104,9 @@ jobs:
         run: |
           echo "Open States scrapers at $(git -C scrapers rev-parse --short HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
           python3 clone/scripts/patch_state_scrapers.py scrapers
+          # Our replacements for upstream scrapers that no longer work (scraper_overrides/<st>/),
+          # e.g. the Virgin Islands' tracker, whose JSON API is gone.
+          cp -R clone/scraper_overrides/. scrapers/scrapers/
 
       - name: Build the scraper image
         run: |

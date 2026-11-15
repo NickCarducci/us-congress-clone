@@ -12,7 +12,7 @@
     "ri": {}, "sc": {}, "sd": {}, "tn": {"split": true}, "ut": {"split": true},
     "va": {"scraper": "csv_bills", "_note": "the bills scraper needs an LIS API key; csv_bills (the LIS CSV files) doesn't"}, "vt": {"_note": "its scraper has no chamber argument: one job"}, "wa": {"split": true}, "wi": {"source": "server", "rpm": 30, "_note": "docs.legis.wisconsin.gov rate-limits GitHub's shared runners (429 even at 6 rpm) but answers the app server: scraped there daily"}, "wv": {},
     "wy": {},
-    "pr": {}, "gu": {}, "vi": {"weekly": true, "_note": "billtracking.legvi.org:8082 is often unreachable from anywhere: scheduled passes try it on Mondays only"}, "mp": {},
+    "pr": {}, "gu": {}, "vi": {"_note": "scraped with our own scraper_overrides/vi (the tracker's old JSON API is gone)"}, "mp": {},
     "ny": {"secret": "NEW_YORK_API_KEY", "_note": "Open Legislation API key (free): legislation.nysenate.gov"},
     "in": {"secret": "INDIANA_API_KEY", "_note": "Indiana General Assembly API key: docs.api.iga.in.gov"},
     "dc": {"secret": "DC_API_KEY", "_note": "DC Council LIMS API key"},
