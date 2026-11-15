@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Scrapes one state on the app server, for legislatures that refuse GitHub's
-# runners but answer the server (Texas: its FTP resets GitHub's connections).
+# runners but answer the server (state-sources.json "source": "server": Texas,
+# whose FTP resets GitHub's connections; Georgia; Wisconsin).
 # Daily from cron on the server (see POP-U-LIST OPS.md), with a clone of this
 # repository kept current by the same cron line.
 #
-#   server_scrape.sh <state> [rpm]
+#   server_scrape.sh <state> [rpm]        one state
+#   server_scrape.sh --all                every state-sources.json "server" state, one after another
 #
 # Same scraper and checkpoints as state-bill-watcher.yml: Open States' published
 # image (openstates/scrapers), this repository's resumable_update.py, and
@@ -12,8 +14,17 @@
 # persists here: an unfinished run's next pass resumes from it; a finished one's
 # next pass starts fresh. Output and errors go to the cron log.
 set -euo pipefail
-state=$1 rpm=${2:-60}
+if [ "${1:-}" = "--all" ]; then
+  # One after another: the server has two CPUs and runs the app too.
+  for st in $(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print(" ".join(s for s, v in sorted(c["states"].items()) if v.get("source") == "server"))' "$(dirname "$0")/../state-sources.json"); do
+    bash "$0" "$st" || echo "$(date -u +%FT%TZ) $st failed ($?)"
+  done
+  exit 0
+fi
+state=$1
 here="$(cd "$(dirname "$0")" && pwd)"
+# Requests a minute: the argument, else state-sources.json's, else 60.
+rpm=${2:-$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print({**c["defaults"], **c["states"].get(sys.argv[2], {})}["rpm"])' "$here/../state-sources.json" "$state" 2>/dev/null || echo 60)}
 image=${SCRAPER_IMAGE:-openstates/scrapers:latest}
 work="${SERVER_SCRAPE_WORK:-$HOME/state-scrape-work}/$state"
 mkdir -p "$work"
