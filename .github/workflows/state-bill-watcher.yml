@@ -61,6 +61,20 @@ jobs:
             > scraped_at.txt || : > scraped_at.txt
           rm -f ~/scytale.key
           echo "$(wc -l < scraped_at.txt) scrape times read"
+      # Legislators' names and ids (openstates/people, CC0-1.0), for matching the
+      # scrapes' roll calls to people: they name voters but carry no id. Sent
+      # before the scrapes so each scrape's sync rebuilds with today's names.
+      - name: Legislators' names for roll calls
+        env:
+          KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+          HOST: ${{ secrets.SCYTALE_HOST }}
+        run: |
+          git clone -q --depth 1 https://github.com/openstates/people.git people-src
+          python3 scripts/export_people.py people-src people | tr '\n' ' '; echo
+          install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
+          rsync -az -4 --checksum -e "ssh -i ~/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30" \
+            people/ "ubuntu@$HOST:/home/ubuntu/state-bills-data/people/" || echo "::warning::people not synced"
+          rm -f ~/scytale.key
       - id: plan
         env:
           STATES: ${{ inputs.states }}
