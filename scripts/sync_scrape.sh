@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sends a scrape's bills to the app server's state-bills-data and rebuilds the
+# Sends a scrape's bills and roll calls (vote_event_*.json) to the app server's state-bills-data and rebuilds the
 # state's catalog.
 #
 #   sync_scrape.sh partial <state> <label> <dir of bill_*.json>   a cut-off scrape's bills (adds, deletes nothing)
@@ -16,10 +16,10 @@ dest="$root/scrape/$label"
 if [ -n "${SYNC_HOST:-}" ]; then
   ssh_opts="-i $SYNC_KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=30"
   run() { ssh $ssh_opts "ubuntu@$SYNC_HOST" "$1"; }
-  copy() { rsync -az -4 $1 --include='bill_*.json' --exclude='*' -e "ssh $ssh_opts" "$2/" "ubuntu@$SYNC_HOST:$dest/"; }
+  copy() { rsync -az -4 $1 --include='bill_*.json' --include='vote_event_*.json' --exclude='*' -e "ssh $ssh_opts" "$2/" "ubuntu@$SYNC_HOST:$dest/"; }
 else
   run() { bash -c "$1"; }
-  copy() { rsync -a $1 --include='bill_*.json' --exclude='*' "$2/" "$dest/"; }
+  copy() { rsync -a $1 --include='bill_*.json' --include='vote_event_*.json' --exclude='*' "$2/" "$dest/"; }
 fi
 
 case "$mode" in
