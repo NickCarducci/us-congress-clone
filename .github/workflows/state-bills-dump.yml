@@ -1,6 +1,6 @@
 # The base layer for state bills: Open States' monthly PostgreSQL dump (public
 # domain, no account or key: data.openstates.org/postgres/monthly/), which
-# holds every state's sessions as of the 1st of the month. Only the bill
+# holds every state's sessions as of the 1st of the month. Only the bill and vote
 # tables are restored, each state's sessions are exported as JSON and synced to
 # the server as files (like us-congress-data), and every state's catalog is
 # rebuilt. Exports are byte-for-byte repeatable, so rsync only sends the
@@ -98,7 +98,6 @@ jobs:
             -t opencivicdata_jurisdiction -t opencivicdata_legislativesession -t opencivicdata_organization \
             -t opencivicdata_bill -t opencivicdata_billabstract -t opencivicdata_billaction \
             -t opencivicdata_billsponsorship -t opencivicdata_billsource /d/dump.pgdump
-          rm dump.pgdump
           docker exec -i pg psql -v ON_ERROR_STOP=1 -U postgres -d openstates <<'SQL'
           CREATE INDEX ON opencivicdata_bill (legislative_session_id);
           CREATE INDEX ON opencivicdata_bill (id);
@@ -111,10 +110,29 @@ jobs:
           SQL
           df -h /
 
+      # Roll calls, for following each state legislator's votes. Their tables
+      # are created from the dump's own definitions (defaults and constraints
+      # dropped: only the data is read).
+      - name: Restore the vote tables
+        run: |
+          docker exec pg pg_restore --schema-only --no-owner -t opencivicdata_voteevent -t opencivicdata_personvote \
+            -f /d/votes-schema.sql /d/dump.pgdump
+          sed -E -e 's/ DEFAULT [^,]*(,?)$/\1/' -e '/^ALTER TABLE/,/;$/d' votes-schema.sql \
+            | docker exec -i pg psql -v ON_ERROR_STOP=1 -U postgres -d openstates
+          docker exec pg pg_restore --data-only --no-owner -U postgres -d openstates -j 4 \
+            -t opencivicdata_voteevent -t opencivicdata_personvote /d/dump.pgdump
+          rm dump.pgdump votes-schema.sql
+          docker exec -i pg psql -v ON_ERROR_STOP=1 -U postgres -d openstates <<'SQL'
+          CREATE INDEX ON opencivicdata_voteevent (legislative_session_id);
+          CREATE INDEX ON opencivicdata_personvote (vote_event_id);
+          ANALYZE;
+          SQL
+          df -h /
+
       - name: Export each state's sessions
         run: |
           pip install -q psycopg2-binary
-          python3 scripts/export_dump_sessions.py export ${FIRST_YEAR:+--first-year $FIRST_YEAR} ${STATES:+--states $STATES} \
+          python3 scripts/export_dump_sessions.py export --votes ${FIRST_YEAR:+--first-year $FIRST_YEAR} ${STATES:+--states $STATES} \
             | tee sessions.tsv
           {
             echo "### Open States dump $MONTH"

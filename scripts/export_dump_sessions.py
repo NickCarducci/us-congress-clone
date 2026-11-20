@@ -7,6 +7,12 @@ organization__name, sponsors with primary).
 
     python3 export_dump_sessions.py <out-dir> [--first-year 2009] [--states nj,pa]
 
+Each session with roll calls also gets <st>_<session>.votes.gz (not .json.gz,
+so the catalog's bill reader skips it): a JSON list of vote events, each
+{bill, chamber, date, motion, result, votes: [[option, voter_id, voter_name]]},
+voter_id being the Open States person id (ocd-person/...) when Open States
+matched the name, which is what the app indexes each legislator's votes by.
+
 Connects with the usual PG* environment variables. Prints one line per
 session (state, session, bills, bytes) and a total, for the workflow summary.
 """
@@ -72,6 +78,48 @@ CHILDREN = {
          ORDER BY x.bill_id, x.id""",
 }
 
+VOTE_EVENTS = """
+SELECT v.id, v.motion_text, v.start_date, v.result, o.classification AS chamber, b.identifier AS bill
+  FROM opencivicdata_voteevent v
+  LEFT JOIN opencivicdata_organization o ON o.id = v.organization_id
+  LEFT JOIN opencivicdata_bill b ON b.id = v.bill_id
+ WHERE v.legislative_session_id = %s
+ ORDER BY v.start_date, v.id
+"""
+
+PERSON_VOTES = """
+SELECT p.vote_event_id, p.option, p.voter_id, p.voter_name
+  FROM opencivicdata_personvote p
+  JOIN opencivicdata_voteevent v ON v.id = p.vote_event_id
+ WHERE v.legislative_session_id = %s
+ ORDER BY p.vote_event_id, p.voter_name, p.id
+"""
+
+
+def write_gzip(path, value):
+    """Repeatable bytes (fixed order, no gzip timestamp), so an unchanged
+    session syncs as unchanged."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
+    with open(path, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0, filename="") as handle:
+        handle.write(payload)
+    return os.path.getsize(path)
+
+
+def session_votes(cursor, session_id):
+    cursor.execute(VOTE_EVENTS, (session_id,))
+    events = {row["id"]: {"bill": row["bill"], "chamber": row["chamber"], "date": row["start_date"],
+                          "motion": row["motion_text"], "result": row["result"], "votes": []}
+              for row in cursor.fetchall()}
+    if not events:
+        return []
+    cursor.execute(PERSON_VOTES, (session_id,))
+    for row in cursor.fetchall():
+        event = events.get(row["vote_event_id"])
+        if event is not None:
+            event["votes"].append([row["option"], row["voter_id"] or None, row["voter_name"]])
+    return list(events.values())
+
 
 def array(value):
     """Columns are restored as text: '{a,b}' arrays and JSON lists alike."""
@@ -100,6 +148,7 @@ def main():
     parser.add_argument("out")
     parser.add_argument("--first-year", type=int, default=0)
     parser.add_argument("--states", default="")
+    parser.add_argument("--votes", action="store_true", help="also write each session's roll calls")
     args = parser.parse_args()
     only = {s.strip().lower() for s in args.states.split(",") if s.strip()}
     os.makedirs(args.out, exist_ok=True)
@@ -147,14 +196,11 @@ def main():
                     row = {"url": row["url"]}
                 bill[key].append(dict(row))
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", session["identifier"])
-        path = os.path.join(args.out, state, f"{state}_{safe}.json.gz")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        # Repeatable bytes (fixed order, no gzip timestamp), so an unchanged
-        # session syncs as unchanged.
-        payload = json.dumps(list(bills.values()), separators=(",", ":"), default=str).encode("utf-8")
-        with open(path, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0, filename="") as handle:
-            handle.write(payload)
-        size = os.path.getsize(path)
+        size = write_gzip(os.path.join(args.out, state, f"{state}_{safe}.json.gz"), list(bills.values()))
+        if args.votes:
+            votes = session_votes(cursor, session["id"])
+            if votes:
+                size += write_gzip(os.path.join(args.out, state, f"{state}_{safe}.votes.gz"), votes)
         total_bills += len(bills)
         total_bytes += size
         print(f"{state}\t{session['identifier']}\t{len(bills)}\t{size}", flush=True)
