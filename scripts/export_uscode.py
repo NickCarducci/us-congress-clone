@@ -64,7 +64,14 @@ def text_of(section):
         if local(child.tag) not in ("num", "heading"):
             walk(child)
     flush()
-    return "\n".join(lines)
+    # A designation alone ("(a)", "(1)") joins the line it designates.
+    joined = []
+    for line in lines:
+        if joined and re.fullmatch(r"\([A-Za-z0-9]+\)", joined[-1]):
+            joined[-1] = f"{joined[-1]} {line}"
+        else:
+            joined.append(line)
+    return "\n".join(joined)
 
 
 def export(zip_path, out):
@@ -92,7 +99,8 @@ def export(zip_path, out):
                         entry["s"] = el.get("status")
                     else:
                         entry["t"] = text_of(el)
-                    sections[m.group(1)] = entry
+                    # The XML writes "1395w–4" with an en dash; citations use a hyphen.
+                    sections[m.group(1).replace("\u2013", "-")] = entry
                     el.clear()
             with gzip.open(os.path.join(out, f"t{title}.json.gz"), "wt", encoding="utf-8") as g:
                 json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
