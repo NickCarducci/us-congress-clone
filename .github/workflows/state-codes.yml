@@ -2,8 +2,10 @@ name: State codes
 
 # Each state's code, section by section, on the app server, so a section a
 # state bill cites opens as its text in the app instead of a link out.
-# scripts/export_state_code.py: one title at a time, a few seconds apart,
-# from each state's own published downloads (terms noted per state there).
+# scripts/export_state_code.py, one resumable crawler for every state
+# (statecodes/crawl.py; each state's source and terms in statecodes/states.py):
+# it asks each unit "changed since?", stops at its time budget or when a site
+# starts refusing, and units.json on the server says where to resume.
 
 on:
   schedule:
@@ -25,31 +27,49 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        state: [va, ca, ny, nj, dc, sd, ut, ia, mi]
+        state: [va, ca, ny, nj, dc, sd, ut, ia, mi, pa]
+    env:
+      SELECTED: ${{ inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state)) }}
+      DEST: /home/ubuntu/state-bills-data/codes/${{ matrix.state }}/
     steps:
       - uses: actions/checkout@v4
-        if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
+        if: env.SELECTED == 'true'
 
-      - name: Export
-        if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
-        env:
-          NEW_YORK_API_KEY: ${{ matrix.state == 'ny' && secrets.NEW_YORK_API_KEY || '' }}
-          UTAH_API_KEY: ${{ matrix.state == 'ut' && secrets.UTAH_API_KEY || '' }}
-        run: |
-          python3 scripts/export_state_code.py "${{ matrix.state }}" "code" | tail -1
-          jq -r '"\(.titles) titles, \(.sections) sections"' code/release.json | tee -a "$GITHUB_STEP_SUMMARY"
-
-      # The titles first, release.json last.
-      - name: Sync to server
-        if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
+      - name: Server access
+        if: env.SELECTED == 'true'
         env:
           KEY: ${{ secrets.SCYTALE_SSH_KEY }}
           HOST: ${{ secrets.SCYTALE_HOST }}
         run: |
           install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
-          ssh_opts="-i $HOME/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
-          dest="/home/ubuntu/state-bills-data/codes/${{ matrix.state }}/"
-          ssh $ssh_opts "ubuntu@$HOST" "mkdir -p '$dest'"
-          rsync -az -4 --checksum --exclude=release.json -e "ssh $ssh_opts" code/ "ubuntu@$HOST:$dest"
-          rsync -az -4 -e "ssh $ssh_opts" code/release.json "ubuntu@$HOST:$dest"
-          rm -f ~/scytale.key
+          echo "SSH_OPTS=-i $HOME/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30" >> "$GITHUB_ENV"
+          echo "REMOTE=ubuntu@$HOST" >> "$GITHUB_ENV"
+
+      # Where the last run got to (none yet: a full first crawl).
+      - name: Pull progress
+        if: env.SELECTED == 'true'
+        run: |
+          mkdir -p code
+          ssh $SSH_OPTS "$REMOTE" "mkdir -p '$DEST'"
+          rsync -az -4 -e "ssh $SSH_OPTS" "$REMOTE:$DEST/units.json" code/ || echo "no units.json yet"
+
+      - name: Export
+        if: env.SELECTED == 'true'
+        env:
+          NEW_YORK_API_KEY: ${{ matrix.state == 'ny' && secrets.NEW_YORK_API_KEY || '' }}
+          UTAH_API_KEY: ${{ matrix.state == 'ut' && secrets.UTAH_API_KEY || '' }}
+          CRAWL_BUDGET_MIN: "90"
+        run: |
+          python3 scripts/export_state_code.py "${{ matrix.state }}" code | tail -3
+          jq -r '"\(.titles) files, \(.sections) sections, \(.visited)/\(.units) units this run" + (if .stopped then "; stopped: \(.stopped)" else "" end)' code/release.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The section files first, then progress, release.json last.
+      - name: Sync to server
+        if: env.SELECTED == 'true'
+        run: |
+          rsync -az -4 --checksum --exclude=release.json --exclude=units.json -e "ssh $SSH_OPTS" code/ "$REMOTE:$DEST"
+          rsync -az -4 -e "ssh $SSH_OPTS" code/units.json code/release.json "$REMOTE:$DEST"
+
+      - name: Clean up
+        if: always() && env.SELECTED == 'true'
+        run: rm -f ~/scytale.key
