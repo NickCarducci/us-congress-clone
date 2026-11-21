@@ -28,10 +28,10 @@ UA = {"User-Agent": "populist-state-code-export (weekly; one title at a time)"}
 csv.field_size_limit(sys.maxsize)
 
 
-def get(url, attempts=3):
+def get(url, attempts=3, timeout=120):
     for attempt in range(attempts):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as r:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
                 return r.read()
         except Exception:
             if attempt == attempts - 1:
@@ -390,8 +390,42 @@ def iowa(out):
     return {"source": f"{site}/law/iowaCode", "year": year, "titles": done, "sections": count}
 
 
+def michigan(out):
+    """The Legislature's MCL XML (legislature.mi.gov/documents/mcl/, one
+    "Chapter <n>.xml" per chapter, UTF-16). Its Automated Data Collection
+    Policy permits automated collection at no more than one request a second;
+    the policy names this directory as the place to take the MCL. One chapter
+    every 2 seconds, weekly. Files are t<chapter>.json.gz, keyed "257.625"."""
+    import xml.etree.ElementTree as ET, urllib.parse
+    base = "https://legislature.mi.gov/documents/mcl/"
+    listing = get(base).decode("utf-8", "replace")
+    chapters = sorted(set(re.findall(r"Chapter ([0-9A-Za-z]+)\.xml", listing)))
+    count, done = 0, 0
+    for ch in chapters:
+        time.sleep(2)
+        root = ET.fromstring(get(base + urllib.parse.quote(f"Chapter {ch}.xml"), timeout=900))
+        sections = {}
+        for s in root.iter("MCLSectionInfo"):
+            number = (s.findtext("MCLNumber") or "").strip()
+            if s.findtext("Repealed") == "true" or not number:
+                continue
+            body = re.sub(r"(?s)<Section-Number>.*?</Section-Number>", "", s.findtext("BodyText") or "")
+            text = plain(body)
+            if text:
+                sections[number] = {"h": (s.findtext("CatchLine") or "").strip().rstrip("."), "t": text}
+        if sections:
+            with gzip.open(os.path.join(out, f"t{ch}.json.gz"), "wt", encoding="utf-8") as g:
+                json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
+            count += len(sections)
+            done += 1
+        print(f"t{ch}\t{len(sections)}", flush=True)
+    if not done:
+        sys.exit("no Michigan chapters (format changed?)")
+    return {"source": base, "titles": done, "sections": count}
+
+
 STATES = {"va": virginia, "ca": california, "ny": new_york, "nj": new_jersey,
-          "dc": district_of_columbia, "sd": south_dakota, "ut": utah, "ia": iowa}
+          "dc": district_of_columbia, "sd": south_dakota, "ut": utah, "ia": iowa, "mi": michigan}
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in STATES:
