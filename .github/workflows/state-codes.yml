@@ -1,0 +1,52 @@
+name: State codes
+
+# Each state's code, section by section, on the app server, so a section a
+# state bill cites opens as its text in the app instead of a link out.
+# scripts/export_state_code.py: one title at a time, a few seconds apart,
+# from each state's own published downloads (terms noted per state there).
+
+on:
+  schedule:
+    - cron: "10 8 * * 2"   # Tuesdays
+  workflow_dispatch:
+    inputs:
+      states:
+        description: Comma-separated state codes (empty = all)
+        default: ""
+
+concurrency:
+  group: state-codes
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        state: [va]
+    steps:
+      - uses: actions/checkout@v4
+        if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
+
+      - name: Export
+        if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
+        run: |
+          python3 scripts/export_state_code.py "${{ matrix.state }}" "code" | tail -1
+          jq -r '"\(.titles) titles, \(.sections) sections"' code/release.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The titles first, release.json last.
+      - name: Sync to server
+        if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
+        env:
+          KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+          HOST: ${{ secrets.SCYTALE_HOST }}
+        run: |
+          install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
+          ssh_opts="-i $HOME/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+          dest="/home/ubuntu/state-bills-data/codes/${{ matrix.state }}/"
+          ssh $ssh_opts "ubuntu@$HOST" "mkdir -p '$dest'"
+          rsync -az -4 --checksum --exclude=release.json -e "ssh $ssh_opts" code/ "ubuntu@$HOST:$dest"
+          rsync -az -4 -e "ssh $ssh_opts" code/release.json "ubuntu@$HOST:$dest"
+          rm -f ~/scytale.key
