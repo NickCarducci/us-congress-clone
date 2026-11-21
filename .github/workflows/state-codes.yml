@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        state: [va, ca, ny, nj]
+        state: [va, ca, ny, nj, dc, sd, ut]
     steps:
       - uses: actions/checkout@v4
         if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
@@ -34,6 +34,7 @@ jobs:
         if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
         env:
           NEW_YORK_API_KEY: ${{ matrix.state == 'ny' && secrets.NEW_YORK_API_KEY || '' }}
+          UTAH_API_KEY: ${{ matrix.state == 'ut' && secrets.UTAH_API_KEY || '' }}
         run: |
           python3 scripts/export_state_code.py "${{ matrix.state }}" "code" | tail -1
           jq -r '"\(.titles) titles, \(.sections) sections"' code/release.json | tee -a "$GITHUB_STEP_SUMMARY"

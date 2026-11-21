@@ -188,7 +188,140 @@ def new_jersey(out):
     return {"source": url, "titles": len(titles), "sections": count}
 
 
-STATES = {"va": virginia, "ca": california, "ny": new_york, "nj": new_jersey}
+def district_of_columbia(out):
+    """The D.C. Council's own XML of the D.C. Code (github.com/DCCouncil/law-xml,
+    public domain; the Council asks bulk users to take the repository instead
+    of scraping code.dccouncil.gov). One zip a week. Annotations (history,
+    notes) left out: statute only."""
+    import xml.etree.ElementTree as ET, zipfile
+    url = "https://github.com/DCCouncil/law-xml/archive/refs/heads/main.zip"
+    ns = "{https://code.dccouncil.us/schemas/dc-library}"
+    z = zipfile.ZipFile(io.BytesIO(get(url)))
+    titles = {}
+
+    def lines(node, depth=0):
+        out_lines, label = [], ""
+        for child in node:
+            tag = child.tag.replace(ns, "")
+            if tag == "num" and depth:
+                label = (child.text or "").strip()
+            elif tag in ("text", "aftertext"):
+                body = " ".join("".join(child.itertext()).split())
+                if body:
+                    out_lines.append(f"{label} {body}".strip() if label else body)
+                    label = ""
+            elif tag == "para":
+                out_lines.extend(lines(child, depth + 1))
+            elif tag == "table":
+                out_lines.extend(" | ".join(" ".join("".join(c.itertext()).split()) for c in row) for row in child.iter(f"{ns}tr"))
+        if label:
+            out_lines.insert(0, label)
+        return out_lines
+
+    for name in z.namelist():
+        m = re.search(r"/us/dc/council/code/titles/([^/]+)/sections/([^/]+)\.xml$", name)
+        if not m:
+            continue
+        root = ET.fromstring(z.read(name))
+        section = (root.findtext(f"{ns}num") or m.group(2)).strip()
+        text = lines(root)
+        if not text and root.find(f"{ns}reason") is not None:
+            continue   # repealed / expired placeholders
+        titles.setdefault(m.group(1), {})[section] = {"h": (root.findtext(f"{ns}heading") or "").strip().rstrip("."), "t": "\n".join(text)}
+    count = 0
+    for title, sections in sorted(titles.items()):
+        with gzip.open(os.path.join(out, f"t{title}.json.gz"), "wt", encoding="utf-8") as g:
+            json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
+        count += len(sections)
+    print(f"{len(titles)} titles", flush=True)
+    return {"source": "https://github.com/DCCouncil/law-xml", "titles": len(titles), "sections": count}
+
+
+def south_dakota(out):
+    """The Legislative Research Council's statutes API (sdlegislature.gov/api),
+    no key, robots.txt allows it: one request per title returns every section
+    (UTF-16 HTML, one document per section). One title every 3 seconds, weekly."""
+    base = "https://sdlegislature.gov/api/Statutes"
+    count, done = 0, 0
+    for n in range(1, 70):
+        for title in (str(n), f"{n}A", f"{n}B"):
+            try:
+                raw = get(f"{base}/{title}.html?all=true", attempts=1)
+            except Exception:
+                time.sleep(1)   # no such title ("2A")
+                continue
+            page = raw.decode("utf-16-le", "replace") if raw[1:2] == b"\x00" else raw.decode("utf-8", "replace")
+            sections = {}
+            for doc in page.split("<hr>"):
+                m = re.search(r'class="[^"]*SENU">([0-9A-Z]+-[0-9A-Z.]+-[0-9A-Z.]+)</span>.*?class="[^"]*CL">(.*?)</span></p>(.*?)</div>', doc, re.S)
+                if not m:
+                    continue
+                body = [p for p in plain(m.group(3)).splitlines() if p.strip()]
+                sections[m.group(1)] = {"h": html.unescape(m.group(2)).strip().rstrip("."), "t": "\n".join(body)}
+            time.sleep(3)
+            if not sections:
+                continue
+            with gzip.open(os.path.join(out, f"t{title}.json.gz"), "wt", encoding="utf-8") as g:
+                json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
+            count += len(sections)
+            done += 1
+            print(f"t{title}\t{len(sections)}", flush=True)
+    if not done:
+        sys.exit("no South Dakota titles (format changed?)")
+    return {"source": f"{base}/<title>.html?all=true", "titles": done, "sections": count}
+
+
+def utah(out):
+    """The Office of Legislative Research and General Counsel's code service
+    (glen.le.utah.gov, developer token in UTAH_API_KEY), the official electronic
+    Utah Code. Its terms: cache a copy, check at most once a day. One title
+    every 3 seconds, weekly."""
+    import xml.etree.ElementTree as ET
+    key = os.environ.get("UTAH_API_KEY")
+    if not key:
+        sys.exit("UTAH_API_KEY is not set")
+    base = "https://glen.le.utah.gov/code"
+    listing = ET.fromstring(get(f"{base}/list/{key}"))
+    numbers = [t.get("number") for t in listing.iter("title") if t.get("number")]
+
+    def lines(node, number=""):
+        # "76-1-101.5(7)(a)" -> "(a)"; inline elements stay on their line.
+        out_lines = []
+        current = ["(" + number.rsplit("(", 1)[-1] + " "] if "(" in number else []
+        current.append(node.text or "")
+
+        def flush():
+            line = " ".join("".join(current).split())
+            if line:
+                out_lines.append(line)
+            current.clear()
+
+        for child in node:
+            if child.tag == "subsection":
+                flush()
+                out_lines.extend(lines(child, child.get("number") or ""))
+            elif child.tag not in ("histories", "catchline", "effdate"):
+                current.append(" ".join("".join(child.itertext()).split()) or " ")
+            current.append(child.tail or "")
+        flush()
+        return out_lines
+
+    count = 0
+    for number in numbers:
+        root = ET.fromstring(get(f"{base}/{number}/{key}"))
+        sections = {}
+        for s in root.iter("section"):
+            sections[s.get("number")] = {"h": (s.findtext("catchline") or "").strip().rstrip("."), "t": "\n".join(lines(s))}
+        with gzip.open(os.path.join(out, f"t{number}.json.gz"), "wt", encoding="utf-8") as g:
+            json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
+        count += len(sections)
+        print(f"t{number}\t{len(sections)}", flush=True)
+        time.sleep(3)
+    return {"source": "https://le.utah.gov/data/developer.htm", "titles": len(numbers), "sections": count}
+
+
+STATES = {"va": virginia, "ca": california, "ny": new_york, "nj": new_jersey,
+          "dc": district_of_columbia, "sd": south_dakota, "ut": utah}
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in STATES:
