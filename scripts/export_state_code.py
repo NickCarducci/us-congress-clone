@@ -150,7 +150,45 @@ def new_york(out):
     return {"source": "https://legislation.nysenate.gov/api/3/laws", "titles": len(names), "sections": count, "codes": names}
 
 
-STATES = {"va": virginia, "ca": california, "ny": new_york}
+def new_jersey(out):
+    import zipfile
+    url = "https://pub.njleg.gov/statutes/STATUTES-TEXT.zip"
+    data = get(url)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        text = z.read("STATUTES.TXT").decode("cp1252", "replace")
+    head = re.compile(r"^(\d+[A-Z]?:\d+[A-Z]?-\d+(?:\.\d+)*[a-z]?)\.?\s+(.*\S)\s*$")
+    titles, current, body = {}, None, []
+
+    def close():
+        if current:
+            section, heading = current
+            lines = [line.strip() for line in body if line.strip()]
+            # The text often repeats the section number first ("1:1-2.  Unless…").
+            if lines:
+                lines[0] = re.sub(rf"^{re.escape(section)}\.?\s*", "", lines[0])
+            # …or the heading again ("Murder.").
+            if lines and lines[0].rstrip(".").strip() == heading.rstrip(".").strip():
+                lines = lines[1:]
+            titles.setdefault(section.split(":")[0], {})[section] = {"h": heading.rstrip("."), "t": "\n".join(l for l in lines if l)}
+
+    for line in text.splitlines():
+        m = head.match(line) if line[:1].isdigit() else None
+        if m:
+            close()
+            current, body = (m.group(1), m.group(2)), []
+        elif current:
+            body.append(line)
+    close()
+    count = 0
+    for title, sections in sorted(titles.items()):
+        with gzip.open(os.path.join(out, f"t{title}.json.gz"), "wt", encoding="utf-8") as g:
+            json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
+        count += len(sections)
+    print(f"{len(titles)} titles", flush=True)
+    return {"source": url, "titles": len(titles), "sections": count}
+
+
+STATES = {"va": virginia, "ca": california, "ny": new_york, "nj": new_jersey}
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in STATES:
