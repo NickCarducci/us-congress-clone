@@ -1,0 +1,68 @@
+name: United States Code
+
+# The U.S. Code, section by section, on the app server, so a cited section
+# opens as its text in the app instead of a link out. The Office of the Law
+# Revision Counsel publishes a new release point as laws are classified into
+# the Code (public domain); a run only downloads when that release point is
+# newer than the server's copy.
+
+on:
+  schedule:
+    - cron: "40 7 * * 1"   # Mondays
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Export even if the server already has this release point
+        type: boolean
+        default: false
+
+concurrency:
+  group: uscode
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Current release point, and the server's
+        id: check
+        env:
+          KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+          HOST: ${{ secrets.SCYTALE_HOST }}
+        run: |
+          current=$(python3 scripts/export_uscode.py current)
+          release=$(jq -r .release <<< "$current")
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "url=$(jq -r .url <<< "$current")" >> "$GITHUB_OUTPUT"
+          install -m 600 /dev/null ~/scytale.key && printf '%s\n' "$KEY" > ~/scytale.key
+          have=$(ssh -i ~/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 "ubuntu@$HOST" \
+            'cat /home/ubuntu/us-congress-data/uscode/release.json 2>/dev/null' | jq -r '.release // empty' || true)
+          echo "Release point $release; server has ${have:-none}" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$have" = "$release" ] && [ "${{ inputs.force }}" != "true" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Download and export
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          curl -fsSL -A "populist-uscode-export (bulk release point, weekly)" -o usc.zip "${{ steps.check.outputs.url }}"
+          python3 scripts/export_uscode.py export usc.zip uscode | tr '\n' ' '; echo
+          rm usc.zip
+          [ "$(jq -r .release uscode/release.json)" = "${{ steps.check.outputs.release }}" ]
+          echo "$(ls uscode/t*.json.gz | wc -l) titles, $(du -sh uscode | cut -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The titles first, release.json last: a reader never sees a new release
+      # stamp over the old titles.
+      - name: Sync to server
+        if: steps.check.outputs.skip != 'true'
+        env:
+          HOST: ${{ secrets.SCYTALE_HOST }}
+        run: |
+          ssh_opts="-i $HOME/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+          rsync -az -4 --checksum --exclude=release.json -e "ssh $ssh_opts" uscode/ "ubuntu@$HOST:/home/ubuntu/us-congress-data/uscode/"
+          rsync -az -4 -e "ssh $ssh_opts" uscode/release.json "ubuntu@$HOST:/home/ubuntu/us-congress-data/uscode/release.json"
+
+      - name: Remove the server key
+        if: always()
+        run: rm -f ~/scytale.key
