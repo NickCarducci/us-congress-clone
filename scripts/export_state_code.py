@@ -16,6 +16,11 @@ which leginfo asks bulk users to use instead of the site), the current
 session's pubinfo_<year>.zip, rebuilt each Sunday: LAW_SECTION_TBL (one row
 per section; its text in LAW_SECTION_TBL_<n>.lob, CAML XML) and CODES_TBL
 (the codes' names). One download a week. Files are t<CODE>.json.gz ("PEN").
+
+New York: the Senate's Open Legislation Laws API (legislation.nysenate.gov,
+free key in NEW_YORK_API_KEY), each law's full tree (full=true), one law
+every few seconds, once a week. Files are t<LAWID>.json.gz ("PEN"), keyed
+by section in lowercase ("2-a").
 """
 import csv, gzip, html, io, json, os, re, sys, time, urllib.request
 
@@ -115,7 +120,37 @@ def california(out):
     return {"source": url, "titles": len(codes), "sections": count, "codes": names}
 
 
-STATES = {"va": virginia, "ca": california}
+def new_york(out):
+    key = os.environ.get("NEW_YORK_API_KEY")
+    if not key:
+        sys.exit("NEW_YORK_API_KEY is not set")
+    base = "https://legislation.nysenate.gov/api/3/laws"
+    listing = json.loads(get(f"{base}?limit=1000&key={key}"))["result"]["items"]
+    names, count = {}, 0
+    for law in listing:
+        law_id = law["lawId"]
+        tree = json.loads(get(f"{base}/{law_id}?full=true&key={key}"))["result"]["documents"]
+        sections = {}
+        stack = [tree]
+        while stack:
+            node = stack.pop()
+            if node.get("docType") == "SECTION" and str(node.get("repealed")).lower() != "true":
+                text = (node.get("text") or "").replace("\\n", "\n")
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                sections[str(node["locationId"]).lower()] = {"h": node.get("title") or "", "t": "\n".join(lines)}
+            stack.extend((node.get("documents") or {}).get("items") or [])
+        if sections:
+            with gzip.open(os.path.join(out, f"t{law_id}.json.gz"), "wt", encoding="utf-8") as g:
+                json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
+            # As bills name it: "Vehicle & Traffic" -> "vehicle and traffic law".
+            names[law_id] = law["name"].replace("&", "and")
+            count += len(sections)
+        print(f"t{law_id}\t{len(sections)}", flush=True)
+        time.sleep(3)
+    return {"source": "https://legislation.nysenate.gov/api/3/laws", "titles": len(names), "sections": count, "codes": names}
+
+
+STATES = {"va": virginia, "ca": california, "ny": new_york}
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in STATES:
