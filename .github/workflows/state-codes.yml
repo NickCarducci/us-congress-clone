@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        state: [va]
+        state: [va, ca]
     steps:
       - uses: actions/checkout@v4
         if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
