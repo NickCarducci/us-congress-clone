@@ -320,8 +320,78 @@ def utah(out):
     return {"source": "https://le.utah.gov/data/developer.htm", "titles": len(numbers), "sections": count}
 
 
+def iowa(out):
+    """The Legislative Services Agency's Iowa Code XML (legis.iowa.gov, one
+    *_slim.xml per chapter, linked from each title's chapter list; robots.txt
+    allows it). No license or rate limit published. One chapter every 2
+    seconds, weekly. Files are t<chapter>.json.gz ("321J"), keyed "321J.2"."""
+    import xml.etree.ElementTree as ET
+    site = "https://www.legis.iowa.gov"
+    first = get(f"{site}/law/iowaCode").decode("utf-8", "replace")
+    years = sorted(set(int(y) for y in re.findall(r"year=(\d{4})", first))) or [int(time.strftime("%Y"))]
+    year = years[-1]
+    titles = sorted(set(re.findall(r"chapters\?title=([IVXL]+)", first))) or \
+        "I II III IV V VI VII VIII IX X XI XII XIII XIV XV XVI".split()
+    chapters = []
+    for t in titles:
+        page = get(f"{site}/law/iowaCode/chapters?title={t}&year={year}").decode("utf-8", "replace")
+        for ch in re.findall(r"attachments/([0-9A-Z]+)_slim\.xml", page):
+            if ch not in chapters:
+                chapters.append(ch)
+        time.sleep(2)
+    X, S = "{http://www.w3.org/1999/xhtml}", "{urn:legix:slim}"
+    LABEL = {"subsection": "{}.", "letteredPara": "{}.", "subpara": "({})", "subparaDiv": "({})"}
+
+    def words(node):
+        return " ".join("".join(node.itertext()).split())
+
+    def lines(node, label=""):
+        out_lines = []
+        for child in node:
+            cls = child.get("class") or ""
+            if cls in ("history", "footnotes", "heading"):
+                continue
+            if child.tag == f"{X}p":
+                body = words(child)
+                if body:
+                    out_lines.append(f"{label} {body}".strip())
+                    label = ""
+            elif child.tag == f"{X}div":
+                ident = child.find(f"{X}div[@class='heading']/{X}span[@class='identifier']")
+                sub = LABEL.get(cls, "{}").format(words(ident)) if ident is not None else ""
+                out_lines.extend(lines(child, sub))
+        if label:
+            out_lines.insert(0, label)
+        return out_lines
+
+    count, done = 0, 0
+    for ch in chapters:
+        try:
+            root = ET.fromstring(get(f"{site}/docs/publications/ICC/{year}/attachments/{ch}_slim.xml", attempts=2))
+        except Exception:
+            time.sleep(2)
+            continue
+        sections = {}
+        for s in root.iter(f"{S}Section"):
+            number = (s.get("id") or "").removeprefix("sec")
+            note = s.find(f"{X}div[@class='heading']/{X}span[@class='headnote']")
+            text = lines(s)
+            if number and text:
+                sections[number] = {"h": (words(note) if note is not None else "").rstrip("."), "t": "\n".join(text)}
+        if sections:
+            with gzip.open(os.path.join(out, f"t{ch}.json.gz"), "wt", encoding="utf-8") as g:
+                json.dump(sections, g, ensure_ascii=False, separators=(",", ":"))
+            count += len(sections)
+            done += 1
+        time.sleep(2)
+    print(f"{done} chapters", flush=True)
+    if not done:
+        sys.exit("no Iowa chapters (format changed?)")
+    return {"source": f"{site}/law/iowaCode", "year": year, "titles": done, "sections": count}
+
+
 STATES = {"va": virginia, "ca": california, "ny": new_york, "nj": new_jersey,
-          "dc": district_of_columbia, "sd": south_dakota, "ut": utah}
+          "dc": district_of_columbia, "sd": south_dakota, "ut": utah, "ia": iowa}
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in STATES:

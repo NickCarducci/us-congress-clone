@@ -21,11 +21,11 @@ concurrency:
 jobs:
   export:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        state: [va, ca, ny, nj, dc, sd, ut]
+        state: [va, ca, ny, nj, dc, sd, ut, ia]
     steps:
       - uses: actions/checkout@v4
         if: inputs.states == '' || contains(format(',{0},', inputs.states), format(',{0},', matrix.state))
