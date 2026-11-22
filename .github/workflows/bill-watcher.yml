@@ -168,5 +168,5 @@ jobs:
           script: |
             set -eu
             for congress in $(seq "$FIRST_CONGRESS" "$CURRENT_CONGRESS"); do
-              node /home/ubuntu/microservice/Consumers/POP-U-LIST/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$congress"
+              node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$congress"
             done

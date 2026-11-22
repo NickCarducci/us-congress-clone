@@ -177,4 +177,4 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
           command_timeout: 120m
-          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data
+          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/stateBillCatalog.cjs /home/ubuntu/state-bills-data

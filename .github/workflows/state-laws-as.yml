@@ -76,4 +76,4 @@ jobs:
           host: ${{ secrets.SCYTALE_HOST }}
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
-          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/stateBillCatalog.cjs /home/ubuntu/state-bills-data AS
+          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/stateBillCatalog.cjs /home/ubuntu/state-bills-data AS

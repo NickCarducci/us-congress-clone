@@ -149,7 +149,7 @@ jobs:
           envs: ARCHIVE_CONGRESS
           script: |
             set -eu
-            node /home/ubuntu/microservice/Consumers/POP-U-LIST/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$ARCHIVE_CONGRESS"
+            node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$ARCHIVE_CONGRESS"
       - name: Finalize completed archive
         if: success() && steps.scrape.outcome == 'success'
         run: python3 scripts/archive_store.py finish --kind "$DATASET" --congress "$CONGRESS"
