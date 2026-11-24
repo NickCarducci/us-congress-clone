@@ -81,7 +81,9 @@ jobs:
         timeout-minutes: 15
         continue-on-error: true
         # --docs=False: the meeting XML only, not every hearing's document package.
-        run: usc-run committee_meetings --docs=False --log=info 2>&1 | grep -v "^Fetching events for committee\|^Downloading: \|^GET - " | head -80
+        run: |
+          usc-run committee_meetings --docs=False --log=info 2>&1 \
+            | grep -v -e '^Fetching events for committee' -e '^Downloading: ' -e '^GET - ' | head -80
 
       - name: Mirror the last two weeks of the Congressional Record (GovInfo)
         working-directory: floor-scraper
