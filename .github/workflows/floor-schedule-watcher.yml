@@ -1,0 +1,122 @@
+name: Floor Schedule Watcher
+
+# What's coming up on each chamber's floor, for Populist's "Upcoming Votes"
+# sort. Two sources, written side by side under data/ on the server
+# (US_CONGRESS_DATA_PATH), next to the bill data bill-watcher.yml syncs:
+#
+#   upcoming_house_floor/<Monday>.json      unitedstates/congress's own task:
+#     docs.house.gov's weekly floor schedule (the bills, and whether each is
+#     under suspension or a rule), for the latest posted week and the next two.
+#   upcoming_floor_program/<date>.json      scripts/floor_program.py: the
+#     Congressional Record's "Next Meeting" section for BOTH chambers (when
+#     each meets next and the bills in its program). The scraper has no Senate
+#     counterpart to docs.house.gov, so this is how the Senate's schedule
+#     arrives; for the House it adds the day to the weekly schedule. The
+#     Record itself comes from our GovInfo mirror (usc-run govinfo, CREC),
+#     the same way bill status and text do: no API key.
+#
+# Both are small, change through the week, and are rewritten whole each run,
+# so this runs often on session days and syncs only those two directories.
+
+on:
+  schedule:
+    # Every two hours, 8 a.m. to 10 p.m. Eastern, Monday to Saturday (the
+    # Record and House schedule post through Friday night).
+    - cron: "0 12-23/2,0,2 * * 1-6"
+  workflow_dispatch:
+
+concurrency:
+  group: floor-schedule-watcher
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The mirrored Records (about 50 MB a day) persist across runs, so each
+      # run downloads only the days GovInfo has added or revised.
+      - name: Restore Record mirror
+        uses: actions/cache/restore@v4
+        with:
+          path: floor-scraper
+          key: floor-scraper-${{ github.run_id }}
+          restore-keys: floor-scraper-
+
+      - name: Install unitedstates/congress scraper
+        run: |
+          set -euo pipefail
+          if [ -d floor-scraper/.git ]; then
+            git -C floor-scraper fetch --depth=1 origin main
+            git -C floor-scraper reset --hard origin/main
+          else
+            rm -rf floor-scraper
+            git clone --depth=1 https://github.com/unitedstates/congress.git floor-scraper
+          fi
+          python3 scripts/patch_scraper.py floor-scraper
+          pip install -q ./floor-scraper
+          mkdir -p floor-scraper/data floor-scraper/cache
+
+      - name: House weekly floor schedule (docs.house.gov)
+        working-directory: floor-scraper
+        # A week with nothing posted (recess) is normal, not a failure.
+        run: usc-run upcoming_house_floor || echo "::warning::upcoming_house_floor found nothing to write"
+
+      - name: Mirror the last two weeks of the Congressional Record (GovInfo)
+        working-directory: floor-scraper
+        run: |
+          set -euo pipefail
+          # The Record's packages are named by day; only the last 14 matter.
+          days=$(python3 -c 'import datetime as d; t=d.date.today(); print("|".join((t-d.timedelta(n)).isoformat() for n in range(15)))')
+          years=$(python3 -c 'import datetime as d; t=d.date.today(); print(",".join(sorted({str(t.year), str((t-d.timedelta(14)).year)})))')
+          usc-run govinfo --collections=CREC --years="$years" --filter="($days)"
+          # Keep the cache bounded: drop packages older than that.
+          [ -d data/govinfo/CREC ] || exit 0
+          find data/govinfo/CREC -mindepth 1 -maxdepth 1 -type d | while read -r dir; do
+            day=$(basename "$dir" | sed 's/^CREC-//')
+            echo "$days" | tr '|' '\n' | grep -qx "$day" || rm -rf "$dir"
+          done
+
+      - name: Next floor programs, both chambers (Congressional Record)
+        run: |
+          python3 -m unittest scripts/test_floor_program.py
+          python3 scripts/floor_program.py floor-scraper/data --days 14
+
+      - name: Save Record mirror
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: floor-scraper
+          key: floor-scraper-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Keep only the schedule output
+        run: |
+          set -euo pipefail
+          mkdir -p sync/data
+          for dir in upcoming_house_floor upcoming_floor_program; do
+            if [ -d "floor-scraper/data/$dir" ]; then
+              mkdir -p "sync/data/$dir"
+              # The JSON only: upcoming_house_floor also downloads the week's
+              # XML and writes per-bill copies under data/<congress>/bills,
+              # which bill-watcher.yml owns.
+              find "floor-scraper/data/$dir" -maxdepth 1 -name '*.json' -exec cp {} "sync/data/$dir/" \;
+            fi
+          done
+          find sync -type f | sort
+
+      - name: Sync to server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz -4
+          path: sync/data/
+          remote_path: /home/ubuntu/us-congress-data/data/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
