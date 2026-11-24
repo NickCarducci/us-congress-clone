@@ -6,6 +6,12 @@ Congress archive runs, about 2,300 bills, including enacted laws):
 - sponsors whose party code is longer than one letter, such as "ID"
   (Independent Democrat), which its sponsor regex rejects (ValueError).
 
+House committee meetings (committee_meetings task), found 2026-11-24 when it
+returned none: docs.house.gov now answers the meeting-XML form post only over
+https (the http address redirects and the post comes back empty), and the
+https page already carries the __EVENTTARGET/__EVENTARGUMENT fields the task
+adds by hand (mechanize: "more than one control matching").
+
 Each fix is an exact text replacement. If upstream has changed the code, the
 replacement is skipped with a warning rather than failing the run.
 
@@ -21,6 +27,17 @@ PATCHES = [
     ("congress/tasks/bill_info.py",
      "+\\[(?P<party>[DRIL])-(?P<state>",
      "+\\[(?P<party>[A-Z]{1,3})-(?P<state>"),
+    ("congress/tasks/committee_meetings.py",
+     "    br.open(eventurl)",
+     "    br.open(eventurl.replace(\"http://\", \"https://\", 1))"),
+    ("congress/tasks/committee_meetings.py",
+     "    br.form.new_control(\"hidden\", \"__EVENTTARGET\", {})",
+     "    if not any(c.name == \"__EVENTTARGET\" for c in br.form.controls):\n"
+     "        br.form.new_control(\"hidden\", \"__EVENTTARGET\", {})"),
+    ("congress/tasks/committee_meetings.py",
+     "    br.form.new_control(\"hidden\", \"__EVENTARGUMENT\", {})",
+     "    if not any(c.name == \"__EVENTARGUMENT\" for c in br.form.controls):\n"
+     "        br.form.new_control(\"hidden\", \"__EVENTARGUMENT\", {})"),
 ]
 
 
@@ -28,6 +45,9 @@ def patch(root):
     applied = 0
     for relative, old, new in PATCHES:
         path = Path(root) / relative
+        if not path.exists():
+            print(f"::warning::scraper patch not applied: {relative} is missing")
+            continue
         text = path.read_text()
         if new in text:
             applied += 1
