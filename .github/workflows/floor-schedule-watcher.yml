@@ -15,9 +15,13 @@ name: Floor Schedule Watcher
 #     Record itself comes from our GovInfo mirror (usc-run govinfo, CREC),
 #     the same way bill status and text do: no API key.
 #
-#   committee_meetings_{house,senate}.json  unitedstates/congress's
-#     committee_meetings task: upcoming hearings and markups and the bills
-#     they take up.
+#   committee_meetings_{house,senate}.json  scripts/committee_meetings_api.py:
+#     upcoming hearings and markups and the bills they take up, from the
+#     Congress.gov API.
+#
+# And for the states, to state-bills-data/events/<ST>.json on the server:
+# upcoming committee hearings and their agenda bills (scripts/state_events.py,
+# Open States API).
 #
 # All are small, change through the week, and are rewritten whole each run,
 # so this runs often on session days and syncs only these.
@@ -36,7 +40,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
@@ -73,15 +77,30 @@ jobs:
         # A week with nothing posted (recess) is normal, not a failure.
         run: usc-run upcoming_house_floor || echo "::warning::upcoming_house_floor found nothing to write"
 
-      # Committee hearings and markups that take up bills, both chambers
-      # (docs.house.gov's committee calendar, senate.gov's hearings.xml), for
-      # the feed's default view: a referred bill with a meeting coming up shows.
-      - name: Committee meetings, both chambers
-        working-directory: floor-scraper
-        timeout-minutes: 15
-        continue-on-error: true
-        # --docs=False: the meeting XML only, not every hearing's document package.
-        run: usc-run committee_meetings --docs=False
+      # Committee hearings and markups that take up bills, both chambers, from
+      # the Congress.gov API (the Library of Congress's database, not a scrape
+      # of docs.house.gov's pages). Details are cached by update time, so a
+      # run fetches only what changed.
+      - name: Committee meetings, both chambers (Congress.gov API)
+        env:
+          CONGRESS_API_KEY: ${{ secrets.CONGRESS_API_KEY }}
+        run: |
+          python3 -m unittest scripts/test_committee_meetings_api.py
+          python3 scripts/committee_meetings_api.py floor-scraper/data --cache floor-scraper/cache/committee_meetings_api.json
+
+      # State committee hearings and the bills on their agendas, from the Open
+      # States API. Twice a day (Open States' free tier allows few requests,
+      # about 60 here), on demand otherwise.
+      - name: State hearings (Open States API)
+        env:
+          OPEN_STATES_KEY: ${{ secrets.OPEN_STATES_KEY }}
+        run: |
+          hour=$(date -u +%H)
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "$hour" != "12" ] && [ "$hour" != "22" ]; then
+            echo "Not a state-hearings hour ($hour UTC)"; exit 0
+          fi
+          python3 -m unittest scripts/test_state_events.py
+          python3 scripts/state_events.py state-events --pause 7
 
       - name: Mirror the last two weeks of the Congressional Record (GovInfo)
         working-directory: floor-scraper
@@ -127,6 +146,17 @@ jobs:
             [ -f "floor-scraper/data/committee_meetings_$chamber.json" ] && cp "floor-scraper/data/committee_meetings_$chamber.json" sync/data/
           done
           find sync -type f | sort
+
+      - name: Sync state hearings to server
+        if: hashFiles('state-events/*.json') != ''
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz -4
+          path: state-events/
+          remote_path: /home/ubuntu/state-bills-data/events/
+          remote_host: ${{ secrets.SCYTALE_HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
 
       - name: Sync to server
         uses: burnett01/rsync-deployments@7.0.1
