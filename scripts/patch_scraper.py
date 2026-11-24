@@ -8,7 +8,8 @@ Congress archive runs, about 2,300 bills, including enacted laws):
 
 House committee meetings (committee_meetings task), found 2026-11-24 when it
 returned none: docs.house.gov now answers the meeting-XML form post only over
-https (the http address redirects and the post comes back empty), and the
+https (the http address redirects and the post comes back empty; so do the
+committee feeds, which then list no meetings at all), and the
 https page already carries the __EVENTTARGET/__EVENTARGUMENT fields the task
 adds by hand (mechanize: "more than one control matching").
 
@@ -27,6 +28,13 @@ PATCHES = [
     ("congress/tasks/bill_info.py",
      "+\\[(?P<party>[DRIL])-(?P<state>",
      "+\\[(?P<party>[A-Z]{1,3})-(?P<state>"),
+    ("congress/tasks/committee_meetings.py",
+     "utils.download(\"http://docs.house.gov/Committee/Committees.aspx\"",
+     "utils.download(\"https://docs.house.gov/Committee/Committees.aspx\""),
+    # Over http the redirect returns an empty feed: no meetings at all.
+    ("congress/tasks/committee_meetings.py",
+     "\"http://docs.house.gov/Committee/RSS.ashx?Code=%s\" % cmte,",
+     "\"https://docs.house.gov/Committee/RSS.ashx?Code=%s\" % cmte,"),
     ("congress/tasks/committee_meetings.py",
      "    br.open(eventurl)",
      "    br.open(eventurl.replace(\"http://\", \"https://\", 1))"),

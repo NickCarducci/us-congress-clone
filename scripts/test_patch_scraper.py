@@ -24,15 +24,21 @@ class PatchScraperTests(unittest.TestCase):
             source = Path(temporary) / "congress/tasks/committee_meetings.py"
             source.parent.mkdir(parents=True)
             source.write_text(
+                "def fetch_house_committee_meetings(committees, options, opts, cmte):\n"
+                "    committee_html = utils.download(\"http://docs.house.gov/Committee/Committees.aspx\", \"x\", opts)\n"
+                "    html = utils.download(\n"
+                "        \"http://docs.house.gov/Committee/RSS.ashx?Code=%s\" % cmte,\n"
+                "        \"y\", opts)\n"
                 "def extract_meeting_package(eventurl, event_id, options):\n"
                 "    br = mechanize.Browser()\n"
                 "    br.open(eventurl)\n"
                 "    br.select_form(nr=0)\n"
                 "    br.form.new_control(\"hidden\", \"__EVENTTARGET\", {})\n"
                 "    br.form.new_control(\"hidden\", \"__EVENTARGUMENT\", {})\n")
-            self.assertEqual(patch_scraper.patch(temporary), 3, "bill_info.py is missing here; the meeting fixes apply")
+            self.assertEqual(patch_scraper.patch(temporary), 5, "bill_info.py is missing here; the meeting fixes apply")
             text = source.read_text()
             self.assertIn('br.open(eventurl.replace("http://", "https://", 1))', text)
+            self.assertNotIn("http://docs.house.gov", text, "every House address is https")
             self.assertIn('if not any(c.name == "__EVENTTARGET" for c in br.form.controls):', text)
             compile(text, "committee_meetings.py", "exec")
 
