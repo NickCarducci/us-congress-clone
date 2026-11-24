@@ -15,8 +15,12 @@ name: Floor Schedule Watcher
 #     Record itself comes from our GovInfo mirror (usc-run govinfo, CREC),
 #     the same way bill status and text do: no API key.
 #
-# Both are small, change through the week, and are rewritten whole each run,
-# so this runs often on session days and syncs only those two directories.
+#   committee_meetings_{house,senate}.json  unitedstates/congress's
+#     committee_meetings task: upcoming hearings and markups and the bills
+#     they take up.
+#
+# All are small, change through the week, and are rewritten whole each run,
+# so this runs often on session days and syncs only these.
 
 on:
   schedule:
@@ -69,6 +73,15 @@ jobs:
         # A week with nothing posted (recess) is normal, not a failure.
         run: usc-run upcoming_house_floor || echo "::warning::upcoming_house_floor found nothing to write"
 
+      # Committee hearings and markups that take up bills, both chambers
+      # (docs.house.gov's committee calendar, senate.gov's hearings.xml), for
+      # the feed's default view: a referred bill with a meeting coming up shows.
+      - name: Committee meetings, both chambers
+        working-directory: floor-scraper
+        timeout-minutes: 15
+        continue-on-error: true
+        run: usc-run committee_meetings
+
       - name: Mirror the last two weeks of the Congressional Record (GovInfo)
         working-directory: floor-scraper
         run: |
@@ -108,6 +121,9 @@ jobs:
               # which bill-watcher.yml owns.
               find "floor-scraper/data/$dir" -maxdepth 1 -name '*.json' -exec cp {} "sync/data/$dir/" \;
             fi
+          done
+          for chamber in house senate; do
+            [ -f "floor-scraper/data/committee_meetings_$chamber.json" ] && cp "floor-scraper/data/committee_meetings_$chamber.json" sync/data/
           done
           find sync -type f | sort
 
