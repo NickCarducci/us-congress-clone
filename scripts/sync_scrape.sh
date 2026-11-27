@@ -31,7 +31,7 @@ case "$mode" in
     if [ "$mode" = final ]; then copy --delete "$arg"; else copy "" "$arg"; fi
     stamp=""
     [ "$mode" = final ] && stamp="&& date -u +%Y-%m-%dT%H:%M:%SZ > '$dest/.scraped_at'"
-    run "node '$app/stateBillCatalog.cjs' '$root' '$state' >/dev/null && flock -w 7200 '$root/legislative-mongo-index.lock' nice -n 19 node '$app/scripts/publish-legislative-index.cjs' ingest-state '${state^^}' $stamp"
+    run "node '$app/stateBillCatalog.cjs' '$root' '$state' >/dev/null && flock -w 7200 '$root/legislative-mongo-index.lock' node '$app/scripts/publish-legislative-index.cjs' ingest-state '${state^^}' $stamp"
     ;;
   *) echo "usage: sync_scrape.sh partial|final <state> <label> <dir>" >&2; exit 2 ;;
 esac

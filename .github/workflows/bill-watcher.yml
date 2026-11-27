@@ -169,5 +169,5 @@ jobs:
             set -eu
             for congress in $(seq "$FIRST_CONGRESS" "$CURRENT_CONGRESS"); do
               node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$congress"
-              flock -w 7200 /home/ubuntu/state-bills-data/legislative-mongo-index.lock nice -n 19 node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/publish-legislative-index.cjs ingest-index "us:$congress"
+              flock -w 7200 /home/ubuntu/state-bills-data/legislative-mongo-index.lock node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/publish-legislative-index.cjs ingest-index "us:$congress"
             done
