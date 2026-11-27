@@ -184,6 +184,7 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
           envs: CURRENT_CONGRESS
+          command_timeout: 120m
           script: |
             LEGISLATIVE_TEXT_BUCKET=populist-legislative-text-410937487237 \
             US_CONGRESS_DATA_PATH=/home/ubuntu/us-congress-data \
