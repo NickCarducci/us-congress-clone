@@ -101,7 +101,10 @@ jobs:
         run: |
           ssh_opts="-i $HOME/scytale.key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
           ssh $ssh_opts "ubuntu@$HOST" "mkdir -p /home/ubuntu/state-bills-data/text/$STATE"
-          [ -f "text/$STATE/index.json" ] && rsync -az -e "ssh $ssh_opts" "text/$STATE/" "ubuntu@$HOST:/home/ubuntu/state-bills-data/text/$STATE/"
+          if [ -f "text/$STATE/index.json" ]; then
+            rsync -az -e "ssh $ssh_opts" "text/$STATE/" "ubuntu@$HOST:/home/ubuntu/state-bills-data/text/$STATE/"
+            ssh $ssh_opts "ubuntu@$HOST" "LEGISLATIVE_TEXT_BUCKET=populist-legislative-text-410937487237 US_CONGRESS_DATA_PATH=/home/ubuntu/us-congress-data STATE_BILLS_DATA_PATH=/home/ubuntu/state-bills-data bash /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/publish-legislative-text.sh state ${STATE^^}"
+          fi
       - name: Remove the server key
         if: always()
         run: rm -f ~/scytale.key

@@ -176,3 +176,16 @@ jobs:
           remote_host: ${{ secrets.SCYTALE_HOST }}
           remote_user: ubuntu
           remote_key: ${{ secrets.SCYTALE_SSH_KEY }}
+      - name: Publish current bill text to S3
+        if: env.SYNC_TEXT_TO_SERVER == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          envs: CURRENT_CONGRESS
+          script: |
+            LEGISLATIVE_TEXT_BUCKET=populist-legislative-text-410937487237 \
+            US_CONGRESS_DATA_PATH=/home/ubuntu/us-congress-data \
+            STATE_BILLS_DATA_PATH=/home/ubuntu/state-bills-data \
+            bash /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/publish-legislative-text.sh federal "$CURRENT_CONGRESS"
