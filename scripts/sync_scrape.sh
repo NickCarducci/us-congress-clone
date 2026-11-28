@@ -10,7 +10,7 @@
 set -euo pipefail
 mode=$1 state=$2 label=$3 arg=$4
 root=${STATE_BILLS_ROOT:-/home/ubuntu/state-bills-data}
-app=${POPULIST_APP:-/home/ubuntu/microservice/Consumers/POP-U-LIST}
+app=${POPULIST_APP:-/home/ubuntu/microservice/Consumers/POP-U-LIST/node}
 dest="$root/scrape/$label"
 
 if [ -n "${SYNC_HOST:-}" ]; then
