@@ -1,6 +1,11 @@
 name: Legislative Index Sync
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        type: choice
+        options: [all, federal, state, local]
+        default: all
 permissions:
   contents: read
 concurrency:
@@ -13,9 +18,12 @@ jobs:
     steps:
       - name: Index existing published catalogs
         uses: appleboy/ssh-action@v1
+        env:
+          INDEX_SCOPE: ${{ inputs.scope || 'all' }}
         with:
           host: ${{ secrets.SCYTALE_HOST }}
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
           command_timeout: 350m
-          script: bash /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/sync-legislative-index.sh
+          envs: INDEX_SCOPE
+          script: bash /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/sync-legislative-index.sh "$INDEX_SCOPE"
