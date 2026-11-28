@@ -176,5 +176,8 @@ jobs:
           host: ${{ secrets.SCYTALE_HOST }}
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
-          command_timeout: 120m
-          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/stateBillCatalog.cjs /home/ubuntu/state-bills-data
+          command_timeout: 350m
+          script: |
+            set -e
+            node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/stateBillCatalog.cjs /home/ubuntu/state-bills-data
+            bash /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/sync-legislative-index.sh state
