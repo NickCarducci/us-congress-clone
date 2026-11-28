@@ -150,6 +150,7 @@ jobs:
           script: |
             set -eu
             node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/prepareBillCatalog.cjs /home/ubuntu/us-congress-data "$ARCHIVE_CONGRESS"
+            flock -w 7200 /home/ubuntu/state-bills-data/legislative-mongo-index.lock node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/publish-legislative-index.cjs ingest-index "us:$ARCHIVE_CONGRESS"
       - name: Finalize completed archive
         if: success() && steps.scrape.outcome == 'success'
         run: python3 scripts/archive_store.py finish --kind "$DATASET" --congress "$CONGRESS"

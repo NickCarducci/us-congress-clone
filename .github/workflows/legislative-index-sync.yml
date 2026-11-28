@@ -1,0 +1,21 @@
+name: Legislative Index Sync
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: legislative-index-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Index existing published catalogs
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SCYTALE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SCYTALE_SSH_KEY }}
+          command_timeout: 350m
+          script: bash /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/sync-legislative-index.sh
