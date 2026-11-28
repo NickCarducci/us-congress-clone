@@ -76,4 +76,9 @@ jobs:
           host: ${{ secrets.SCYTALE_HOST }}
           username: ubuntu
           key: ${{ secrets.SCYTALE_SSH_KEY }}
-          script: node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/stateBillCatalog.cjs /home/ubuntu/state-bills-data AS
+          command_timeout: 120m
+          script: |
+            set -eu
+            node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/stateBillCatalog.cjs /home/ubuntu/state-bills-data AS
+            flock -w 7200 /home/ubuntu/state-bills-data/legislative-mongo-index.lock node /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/publish-legislative-index.cjs ingest-state AS
+            LEGISLATIVE_TEXT_BUCKET=populist-legislative-text-410937487237 US_CONGRESS_DATA_PATH=/home/ubuntu/us-congress-data STATE_BILLS_DATA_PATH=/home/ubuntu/state-bills-data bash /home/ubuntu/microservice/Consumers/POP-U-LIST/node/scripts/publish-legislative-text.sh state AS
