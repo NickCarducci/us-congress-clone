@@ -1,0 +1,25 @@
+name: Publish Historical Text to S3
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: historical-text-s3
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        congress: [103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Transfer existing archive bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCYTALE_HOST: ${{ secrets.SCYTALE_HOST }}
+          SCYTALE_SSH_KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+        run: bash scripts/publish_historical_text_s3.sh '${{ matrix.congress }}'

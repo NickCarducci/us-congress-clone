@@ -124,6 +124,12 @@ jobs:
       - name: Publish text lookup bundles
         if: matrix.kind == 'text' && steps.scrape.outcome == 'success'
         run: python3 scripts/archive_store.py bundles --kind text --congress "$CONGRESS"
+      - name: Publish archived text to S3
+        if: matrix.kind == 'text' && steps.scrape.outcome == 'success'
+        env:
+          SCYTALE_HOST: ${{ secrets.SCYTALE_HOST }}
+          SCYTALE_SSH_KEY: ${{ secrets.SCYTALE_SSH_KEY }}
+        run: bash scripts/publish_historical_text_s3.sh "$CONGRESS"
       - name: Export compact browsing metadata
         if: (matrix.kind == 'status' || matrix.congress < 108) && steps.scrape.outcome == 'success'
         run: python3 scripts/archive_store.py export --kind "$DATASET" --congress "$CONGRESS"
